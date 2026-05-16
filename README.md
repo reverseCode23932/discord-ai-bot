@@ -24,7 +24,7 @@ Uses an **official Discord bot token** from the [Developer Portal](https://disco
 ## Quick start
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/discord-ai-bot.git
+git clone https://github.com/<your-username>/discord-ai-bot.git
 cd discord-ai-bot
 
 python -m venv .venv
@@ -151,6 +151,31 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 | Voice silent / errors | Install FFmpeg and ensure it is on `PATH` |
 | `Missing env vars` | Create `.env` from `.env.example` |
 | OpenAI errors | Check API key and billing on OpenAI dashboard |
+
+## Publish to GitHub
+
+Git is already initialized locally with an initial commit. To push to GitHub:
+
+1. Install [GitHub CLI](https://cli.github.com/) (or use `winget install GitHub.cli`)
+2. Log in:
+
+   ```powershell
+   gh auth login
+   ```
+
+3. Create the remote repo and push:
+
+   ```powershell
+   cd C:\Users\Gleb\discord-ai-bot
+   .\scripts\publish-to-github.ps1
+   ```
+
+   Or manually: create an empty repo on github.com, then:
+
+   ```powershell
+   git remote add origin https://github.com/<your-username>/discord-ai-bot.git
+   git push -u origin main
+   ```
 
 ## License
 
