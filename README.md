@@ -225,12 +225,15 @@ local STT (12 chars): привет как дела
 
 - **Do not duplicate** `WHISPER_LOCAL_MODEL` — if it appears twice, only the **first** line wins (dotenv default). Keep one line.
 - Set `/language ru` (or your code) so Whisper uses the right language hint.
-- If recognition is still weak, try `WHISPER_LOCAL_MODEL=medium` or enable GPU:
+- If recognition is still weak, try `WHISPER_LOCAL_MODEL=medium` (slower, ~5 GB RAM).
+- **GPU (optional):** only if CUDA 12 and `cublas64_12.dll` are installed on Windows:
 
   ```env
   WHISPER_DEVICE=cuda
   WHISPER_COMPUTE_TYPE=float16
   ```
+
+  If you see `Library cublas64_12.dll is not found`, use `WHISPER_DEVICE=cpu` — the bot also **auto-falls back to CPU** when CUDA fails.
 
 ### Speaking tips
 
@@ -290,6 +293,8 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 | `Missing env vars` | Create `.env` from `.env.example` |
 | OpenAI 429 / quota | Switch to `LLM_PROVIDER=ollama` or `groq`; use `STT_ENGINE=local` |
 | Ollama connection / no voice reply | Run `ollama serve` and `ollama pull llama3.2`; increase `LLM_TIMEOUT_SECONDS` |
+| `cublas64_12.dll is not found` | Set `WHISPER_DEVICE=cpu` and `WHISPER_COMPUTE_TYPE=int8` (or install CUDA 12 toolkit) |
+| Log spam `unexpected rtcp packet` | Harmless; suppressed at default log levels in recent versions |
 | `gh` not recognized | Close/reopen terminal or use full path to `gh.exe` (see below) |
 
 ## GitHub — clone, update, and push

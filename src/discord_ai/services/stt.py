@@ -22,7 +22,12 @@ log = get_logger("stt")
 
 _client: OpenAI | None = None
 _local_model: object | None = None
+_local_device: str = ""
+_local_compute: str = ""
 _openai_stt_disabled = False
+
+# Skip segments Whisper thinks are non-speech (reduces garbage on noise)
+_NO_SPEECH_PROB_MAX = 0.55
 
 _HAS_GOOGLE: bool | None = None
 _HAS_LOCAL: bool | None = None
@@ -139,50 +144,124 @@ def _google_transcribe(wav_path: Path, language: str | None) -> str:
     return (text or "").strip()
 
 
-def _get_local_model():
-    global _local_model
-    if _local_model is None:
-        from faster_whisper import WhisperModel
+def _is_cuda_runtime_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "cublas",
+            "cudnn",
+            "cuda",
+            "cudart",
+            "out of memory",
+            "no cuda",
+        )
+    )
 
-        log.info(
-            "Loading local Whisper '%s' (device=%s compute=%s; first run may download)...",
-            WHISPER_LOCAL_MODEL,
-            WHISPER_DEVICE,
-            WHISPER_COMPUTE_TYPE,
-        )
-        _local_model = WhisperModel(
-            WHISPER_LOCAL_MODEL,
-            device=WHISPER_DEVICE,
-            compute_type=WHISPER_COMPUTE_TYPE,
-        )
+
+def _load_whisper_model(device: str, compute_type: str):
+    from faster_whisper import WhisperModel
+
+    log.info(
+        "Loading local Whisper '%s' (device=%s compute=%s; first run may download)...",
+        WHISPER_LOCAL_MODEL,
+        device,
+        compute_type,
+    )
+    return WhisperModel(
+        WHISPER_LOCAL_MODEL,
+        device=device,
+        compute_type=compute_type,
+    )
+
+
+def _reset_local_model() -> None:
+    global _local_model, _local_device, _local_compute
+    _local_model = None
+    _local_device = ""
+    _local_compute = ""
+
+
+def _get_local_model():
+    global _local_model, _local_device, _local_compute
+    if _local_model is not None:
+        return _local_model
+
+    device = WHISPER_DEVICE
+    compute = WHISPER_COMPUTE_TYPE
+
+    if device in ("cuda", "gpu"):
+        try:
+            _local_model = _load_whisper_model("cuda", compute)
+            _local_device = "cuda"
+            _local_compute = compute
+            return _local_model
+        except Exception as exc:
+            if not _is_cuda_runtime_error(exc):
+                raise
+            log.warning(
+                "CUDA Whisper failed (%s) — falling back to CPU. "
+                "Install CUDA 12 + cuBLAS or set WHISPER_DEVICE=cpu in .env",
+                exc,
+            )
+            _reset_local_model()
+
+    _local_model = _load_whisper_model("cpu", "int8")
+    _local_device = "cpu"
+    _local_compute = "int8"
+    if device in ("cuda", "gpu"):
+        log.info("Whisper running on CPU (int8). Set WHISPER_DEVICE=cpu to skip CUDA attempt.")
     return _local_model
+
+
+def _collect_transcript(segments, info, language: str | None) -> str:
+    parts: list[str] = []
+    for segment in segments:
+        no_speech = getattr(segment, "no_speech_prob", 0.0) or 0.0
+        if no_speech > _NO_SPEECH_PROB_MAX:
+            log.debug("Skipped segment (no_speech_prob=%.2f): %s", no_speech, segment.text[:40])
+            continue
+        text = segment.text.strip()
+        if text:
+            parts.append(text)
+
+    prob = getattr(info, "language_probability", None)
+    if prob is not None:
+        log.debug(
+            "Whisper lang=%s prob=%.2f duration=%.2fs device=%s",
+            getattr(info, "language", language),
+            prob,
+            getattr(info, "duration", 0.0),
+            _local_device,
+        )
+    return " ".join(parts).strip()
 
 
 def _local_transcribe(wav_path: Path, language: str | None) -> str:
     if not _probe_local():
         raise STTNotConfiguredError("pip install faster-whisper")
 
-    model = _get_local_model()
     kwargs: dict = {
         "beam_size": WHISPER_BEAM_SIZE,
         "vad_filter": WHISPER_VAD_FILTER,
-        # Reduces chained hallucinations between utterances
         "condition_on_previous_text": False,
         "temperature": 0.0,
     }
     if language:
         kwargs["language"] = language
-    segments, info = model.transcribe(str(wav_path), **kwargs)
-    text = " ".join(segment.text.strip() for segment in segments).strip()
-    prob = getattr(info, "language_probability", None)
-    if prob is not None:
-        log.debug(
-            "Whisper lang=%s prob=%.2f duration=%.2fs",
-            getattr(info, "language", language),
-            prob,
-            getattr(info, "duration", 0.0),
-        )
-    return text
+
+    try:
+        model = _get_local_model()
+        segments, info = model.transcribe(str(wav_path), **kwargs)
+        return _collect_transcript(segments, info, language)
+    except RuntimeError as exc:
+        if _local_device != "cuda" or not _is_cuda_runtime_error(exc):
+            raise
+        log.warning("Whisper CUDA runtime error during transcribe — retrying on CPU")
+        _reset_local_model()
+        model = _get_local_model()
+        segments, info = model.transcribe(str(wav_path), **kwargs)
+        return _collect_transcript(segments, info, language)
 
 
 def _is_quota_error(exc: RateLimitError) -> bool:

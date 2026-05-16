@@ -49,6 +49,11 @@ def setup_logging() -> None:
 
     logging.getLogger("discord").setLevel(logging.WARNING)
     logging.getLogger("discord.http").setLevel(logging.WARNING)
+    # Harmless RTCP sender reports — very noisy at INFO during /listen
+    logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
+    logging.getLogger("discord.ext.voice_recv.reader").setLevel(logging.WARNING)
+    logging.getLogger("discord.ext.voice_recv.gateway").setLevel(logging.WARNING)
+    logging.getLogger("discord.ext.voice_recv.opus").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.INFO)
