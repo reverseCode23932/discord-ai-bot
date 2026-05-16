@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import io
+import time
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -36,6 +37,7 @@ log = get_logger("voice.listen")
 SAMPLE_RATE = 48_000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
+DAVE_READY_TIMEOUT = 20.0
 
 
 def _strip_wake_word(text: str) -> str | None:
@@ -62,6 +64,20 @@ def pcm_to_wav(pcm: bytes) -> bytes:
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(pcm)
     return buf.getvalue()
+
+
+async def _wait_dave_ready(vc: discord.VoiceClient, timeout: float = DAVE_READY_TIMEOUT) -> bool:
+    """Wait for Discord DAVE encryption before receiving voice (reduces corrupted Opus)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        conn = getattr(vc, "_connection", None)
+        session = getattr(conn, "dave_session", None) if conn else None
+        if session is not None and getattr(session, "ready", False):
+            log.debug("DAVE session ready")
+            return True
+        await asyncio.sleep(0.25)
+    log.warning("DAVE not ready after %.0fs — starting listen anyway", timeout)
+    return False
 
 
 if HAS_VOICE_RECV:
@@ -124,7 +140,8 @@ class ListenSession:
     guild_id: int
     user_id: int
     text_channel_id: int
-    sink: object
+    reply_in_voice: bool | None
+    sink: object = field(default=None)
 
 
 class VoiceListenManager:
@@ -135,6 +152,70 @@ class VoiceListenManager:
     def is_listening(self, guild_id: int) -> bool:
         return guild_id in self.sessions
 
+    def _make_on_utterance(self, session: ListenSession) -> Callable[[bytes], None]:
+        def on_utterance(pcm: bytes) -> None:
+            asyncio.run_coroutine_threadsafe(
+                self._handle_utterance(
+                    session.guild_id,
+                    session.user_id,
+                    session.text_channel_id,
+                    pcm,
+                    reply_in_voice=session.reply_in_voice,
+                ),
+                self.bot.loop,
+            )
+
+        return on_utterance
+
+    def _begin_listen(self, vc: voice_recv.VoiceRecvClient, session: ListenSession) -> None:
+        sink = CommandListenSink(
+            target_user_id=session.user_id,
+            on_utterance=self._make_on_utterance(session),
+        )
+        session.sink = sink
+
+        def after(err: Exception | None) -> None:
+            asyncio.run_coroutine_threadsafe(
+                self._on_listen_ended(session.guild_id, err),
+                self.bot.loop,
+            )
+
+        vc.listen(sink, after=after)
+
+    async def _on_listen_ended(self, guild_id: int, err: Exception | None) -> None:
+        session = self.sessions.get(guild_id)
+        if not session:
+            return
+
+        if err is None:
+            log.info("Voice listen ended normally (guild=%s)", guild_id)
+            return
+
+        log.error("Voice listen crashed (guild=%s): %s", guild_id, err, exc_info=err)
+
+        guild = self.bot.get_guild(guild_id)
+        vc = guild.voice_client if guild else None
+        if (
+            not vc
+            or not isinstance(vc, voice_recv.VoiceRecvClient)
+            or not vc.is_connected()
+            or guild_id not in self.sessions
+        ):
+            return
+
+        await asyncio.sleep(1.5)
+        try:
+            if vc.is_listening():
+                vc.stop_listening()
+            await _wait_dave_ready(vc)
+            self._begin_listen(vc, session)
+            log.info("Voice listen restarted (guild=%s)", guild_id)
+            channel = self.bot.get_channel(session.text_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                await channel.send("Voice listen recovered after an audio glitch.")
+        except Exception:
+            log.exception("Could not restart voice listen (guild=%s)", guild_id)
+
     async def start(
         self,
         interaction: discord.Interaction,
@@ -143,7 +224,8 @@ class VoiceListenManager:
     ) -> str:
         if not HAS_VOICE_RECV:
             raise RuntimeError(
-                "Install voice receive: pip install discord-ext-voice-recv"
+                "Install voice receive from the DAVE-compatible fork:\n"
+                "pip install git+https://github.com/rdphillips7/discord-ext-voice-recv.git@main"
             )
         if not interaction.guild or not interaction.user.voice:
             raise RuntimeError("Join a voice channel first.")
@@ -156,37 +238,23 @@ class VoiceListenManager:
         await self.stop(guild_id)
 
         vc = await connect_voice_channel(channel)
-        text_channel_id = interaction.channel_id  # type: ignore[assignment]
-        user_id = interaction.user.id
+        assert isinstance(vc, voice_recv.VoiceRecvClient)
 
-        def on_utterance(pcm: bytes) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self._handle_utterance(
-                    guild_id,
-                    user_id,
-                    text_channel_id,
-                    pcm,
-                    reply_in_voice=reply_in_voice,
-                ),
-                self.bot.loop,
-            )
+        await _wait_dave_ready(vc)
 
-        sink = CommandListenSink(
-            target_user_id=user_id,
-            on_utterance=on_utterance,
-        )
-        vc.listen(sink)
-
-        self.sessions[guild_id] = ListenSession(
+        session = ListenSession(
             guild_id=guild_id,
-            user_id=user_id,
-            text_channel_id=text_channel_id,
-            sink=sink,
+            user_id=interaction.user.id,
+            text_channel_id=interaction.channel_id,  # type: ignore[assignment]
+            reply_in_voice=reply_in_voice,
         )
+        self.sessions[guild_id] = session
+        self._begin_listen(vc, session)
+
         log.info(
             "Listen started (guild=%s user=%s channel=%s)",
             guild_id,
-            user_id,
+            session.user_id,
             channel.id,
         )
 
@@ -196,7 +264,7 @@ class VoiceListenManager:
             else " Speak your question when the green circle appears."
         )
         return (
-            f"Listening in **{channel.name}** for <@{user_id}>.{wake}\n"
+            f"Listening in **{channel.name}** for <@{session.user_id}>.{wake}\n"
             "Use `/stoplisten` or `/leave` to stop."
         )
 

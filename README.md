@@ -173,6 +173,7 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 | Slash commands missing | Re-invite with `applications.commands` scope; wait ~1 min after start |
 | Voice error **4017** / cannot join VC | `pip install davey` and `discord.py>=2.7` |
 | `/listen` does nothing | Install `discord-ext-voice-recv`; speak when green ring shows |
+| `OpusError: corrupted stream` | Reinstall deps from `requirements.txt` (DAVE-patched voice-recv fork) |
 | Voice silent / no audio | Install FFmpeg and ensure it is on `PATH` |
 | `Missing env vars` | Create `.env` from `.env.example` |
 | OpenAI errors | Check API key and billing on OpenAI dashboard |

@@ -27,8 +27,19 @@ def check_voice_dependencies() -> list[str]:
         from discord.ext import voice_recv  # noqa: F401
     except ImportError:
         missing.append(
-            "discord-ext-voice-recv — pip install discord-ext-voice-recv  (for /listen)"
+            "discord-ext-voice-recv — pip install -r requirements.txt  (DAVE fork, for /listen)"
         )
+    else:
+        try:
+            import inspect
+            from discord.ext.voice_recv import opus
+
+            if "dave_session.decrypt" not in inspect.getsource(opus.PacketDecoder._process_packet):
+                missing.append(
+                    "discord-ext-voice-recv (old build) — pip install -r requirements.txt for DAVE fix"
+                )
+        except Exception:
+            pass
 
     return missing
 
