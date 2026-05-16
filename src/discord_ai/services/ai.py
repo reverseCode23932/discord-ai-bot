@@ -14,6 +14,7 @@ from discord_ai.config import (
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_PROVIDER,
+    LLM_TIMEOUT_SECONDS,
     MAX_REPLY_CHARS,
 )
 from discord_ai.i18n.languages import resolve_language
@@ -89,7 +90,13 @@ def init_llm() -> None:
     if _provider in ("openai", "groq", "custom") and not api_key:
         raise RuntimeError(f"LLM_API_KEY required for provider={_provider}")
 
-    _client = OpenAI(api_key=api_key, base_url=base_url)
+    timeout = httpx.Timeout(
+        connect=15.0,
+        read=float(LLM_TIMEOUT_SECONDS),
+        write=30.0,
+        pool=15.0,
+    )
+    _client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
     log.info("LLM ready (provider=%s, model=%s, base=%s)", _provider, _model, base_url)
 
 
@@ -145,7 +152,20 @@ async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
         return (response.choices[0].message.content or "").strip()
 
     try:
-        reply = await asyncio.to_thread(_call)
+        reply = await asyncio.wait_for(
+            asyncio.to_thread(_call),
+            timeout=float(LLM_TIMEOUT_SECONDS) + 10.0,
+        )
+    except asyncio.TimeoutError:
+        log.error(
+            "LLM timed out after %ss (provider=%s user=%s)",
+            LLM_TIMEOUT_SECONDS,
+            _provider,
+            user_id,
+        )
+        raise RuntimeError(
+            ui_for_user(settings.get(user_id).language, "llm_timeout")
+        ) from None
     except Exception as exc:
         log.exception("LLM call failed (provider=%s)", _provider)
         raise RuntimeError(_friendly_error(user_id, exc)) from exc

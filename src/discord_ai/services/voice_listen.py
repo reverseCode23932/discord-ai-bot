@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import time
-import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -13,6 +11,8 @@ from typing import TYPE_CHECKING, Callable
 import discord
 
 from discord_ai.config import (
+    CHAT_WHISPER_DELETE_AFTER,
+    LLM_TIMEOUT_SECONDS,
     MIN_SPEECH_BYTES,
     VOICE_ERROR_COOLDOWN,
     VOICE_REPLY_TEXT,
@@ -24,8 +24,10 @@ from discord_ai.i18n.languages import resolve_language
 from discord_ai.i18n.ui import ui_default, ui_for_user
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.ai import ask_ai
+from discord_ai.services.audio_prep import discord_pcm_to_whisper_wav
 from discord_ai.services.settings import settings
 from discord_ai.services.stt import STTQuotaError, transcribe_wav
+from discord_ai.services.stt_filters import is_valid_transcript
 from discord_ai.services.voice_connect import HAS_VOICE_RECV, connect_voice_channel
 from discord_ai.tts.synthesizer import synthesize
 
@@ -57,16 +59,6 @@ def _strip_wake_word(text: str) -> str | None:
             rest = text[idx + len(w) :].lstrip(" ,.:;!?-")
             return rest.strip() or None
     return None
-
-
-def pcm_to_wav(pcm: bytes) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(SAMPLE_WIDTH)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(pcm)
-    return buf.getvalue()
 
 
 async def _wait_dave_ready(vc: discord.VoiceClient, timeout: float = DAVE_READY_TIMEOUT) -> bool:
@@ -149,6 +141,7 @@ class ListenSession:
     last_utterance_at: float = 0.0
     last_error_at: float = 0.0
     last_error_key: str = ""
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class VoiceListenManager:
@@ -320,6 +313,28 @@ class VoiceListenManager:
             log.info("Listen stopped (guild=%s)", guild_id)
         return session is not None
 
+    async def _whisper_to_chat(
+        self,
+        session: ListenSession,
+        channel: discord.TextChannel,
+        *,
+        heard: str,
+        reply: str,
+    ) -> None:
+        delete_after = (
+            CHAT_WHISPER_DELETE_AFTER if CHAT_WHISPER_DELETE_AFTER > 0 else None
+        )
+        await channel.send(
+            ui_for_user(
+                session.user_lang,
+                "voice_whisper",
+                mention=f"<@{session.user_id}>",
+                heard=heard,
+                reply=reply,
+            ),
+            delete_after=delete_after,
+        )
+
     async def _handle_utterance(
         self,
         guild_id: int,
@@ -333,83 +348,99 @@ class VoiceListenManager:
         if not session or session.user_id != user_id:
             return
 
-        now = time.monotonic()
-        if now - session.last_utterance_at < VOICE_UTTERANCE_COOLDOWN:
-            log.debug("Utterance ignored (cooldown)")
+        if session.lock.locked():
+            log.debug("Utterance ignored (still processing previous)")
             return
-        session.last_utterance_at = now
 
         text_channel = self.bot.get_channel(text_channel_id)
         if not isinstance(text_channel, discord.TextChannel):
             return
 
-        wav_path = self.bot.temp_dir / f"stt_{guild_id}_{user_id}.wav"
-        try:
-            wav_path.write_bytes(pcm_to_wav(pcm))
-            raw = await transcribe_wav(wav_path, language=session.user_lang)
-        except STTQuotaError:
-            log.error("STT quota exhausted (guild=%s)", guild_id)
-            await self._notify_channel(
-                session, text_channel, "quota_exhausted", cooldown=300
-            )
-            return
-        except Exception:
-            log.exception("STT failed (guild=%s user=%s)", guild_id, user_id)
-            await self._notify_channel(session, text_channel, "stt_failed")
-            return
-        finally:
-            wav_path.unlink(missing_ok=True)
+        async with session.lock:
+            now = time.monotonic()
+            if now - session.last_utterance_at < VOICE_UTTERANCE_COOLDOWN:
+                log.debug("Utterance ignored (cooldown)")
+                return
 
-        if not raw:
-            return
-
-        command = _strip_wake_word(raw)
-        if command is None:
-            log.debug("Ignored (no wake word): %s", raw[:80])
-            return
-
-        stop_phrases = {
-            "stop listening",
-            "stop listen",
-            "stop",
-            "quiet",
-            "shut up",
-            "стоп",
-            "остановись",
-            "зупини",
-        }
-        if command.lower() in stop_phrases:
-            await self.stop(guild_id)
-            await text_channel.send(ui_for_user(session.user_lang, "listen_stopped"))
-            return
-
-        log.info("Voice command (user=%s): %s", user_id, command[:120])
-
-        try:
-            reply = await ask_ai(text_channel_id, user_id, command)
-        except Exception as exc:
-            log.exception("AI failed for voice command")
-            await self._notify_channel(
-                session, text_channel, "ai_error", error=str(exc)
-            )
-            return
-
-        use_tts = VOICE_REPLY_TTS if reply_in_voice is None else reply_in_voice
-        if VOICE_REPLY_TEXT:
-            await text_channel.send(
-                ui_for_user(
-                    session.user_lang,
-                    "heard_reply",
-                    heard=command,
-                    reply=reply,
+            wav_path = self.bot.temp_dir / f"stt_{guild_id}_{user_id}.wav"
+            try:
+                wav_path.write_bytes(discord_pcm_to_whisper_wav(pcm))
+                raw = await transcribe_wav(wav_path, language=session.user_lang)
+            except STTQuotaError:
+                log.error("STT quota exhausted (guild=%s)", guild_id)
+                await self._notify_channel(
+                    session, text_channel, "quota_exhausted", cooldown=300
                 )
-            )
+                return
+            except Exception:
+                log.exception("STT failed (guild=%s user=%s)", guild_id, user_id)
+                await self._notify_channel(session, text_channel, "stt_failed")
+                return
+            finally:
+                wav_path.unlink(missing_ok=True)
 
-        if use_tts:
-            guild = self.bot.get_guild(guild_id)
-            vc = guild.voice_client if guild else None
-            if vc and vc.is_connected():
-                await _play_tts_on_vc(self.bot, vc, user_id, reply)
+            if not raw:
+                return
+
+            if not is_valid_transcript(raw):
+                log.info("Ignored STT hallucination/noise: %s", raw[:80])
+                return
+
+            command = _strip_wake_word(raw)
+            if command is None:
+                log.debug("Ignored (no wake word): %s", raw[:80])
+                return
+
+            stop_phrases = {
+                "stop listening",
+                "stop listen",
+                "stop",
+                "quiet",
+                "shut up",
+                "стоп",
+                "остановись",
+                "зупини",
+            }
+            if command.lower() in stop_phrases:
+                await self.stop(guild_id)
+                await text_channel.send(
+                    ui_for_user(session.user_lang, "listen_stopped"),
+                    delete_after=CHAT_WHISPER_DELETE_AFTER or None,
+                )
+                return
+
+            session.last_utterance_at = time.monotonic()
+            log.info("Voice command (user=%s): %s", user_id, command[:120])
+
+            try:
+                reply = await asyncio.wait_for(
+                    ask_ai(text_channel_id, user_id, command),
+                    timeout=float(LLM_TIMEOUT_SECONDS) + 15.0,
+                )
+            except asyncio.TimeoutError:
+                log.error("Voice AI timed out (guild=%s user=%s)", guild_id, user_id)
+                await self._notify_channel(
+                    session, text_channel, "llm_timeout", cooldown=30
+                )
+                return
+            except Exception as exc:
+                log.exception("AI failed for voice command")
+                await self._notify_channel(
+                    session, text_channel, "ai_error", error=str(exc)
+                )
+                return
+
+            use_tts = VOICE_REPLY_TTS if reply_in_voice is None else reply_in_voice
+            if VOICE_REPLY_TEXT:
+                await self._whisper_to_chat(
+                    session, text_channel, heard=command, reply=reply
+                )
+
+            if use_tts:
+                guild = self.bot.get_guild(guild_id)
+                vc = guild.voice_client if guild else None
+                if vc and vc.is_connected():
+                    await _play_tts_on_vc(self.bot, vc, user_id, reply)
 
 
 async def _play_tts_on_vc(

@@ -75,20 +75,42 @@ STT_ENGINE = os.getenv("STT_ENGINE", "local").strip().lower()
 if STT_ENGINE not in ("openai", "google", "local", "auto"):
     STT_ENGINE = "local"
 
-WHISPER_LOCAL_MODEL = os.getenv("WHISPER_LOCAL_MODEL", "tiny").strip() or "tiny"
+# tiny=fast/inaccurate | base=ok | small=recommended for RU | medium=best if RAM allows
+_whisper_model = os.getenv("WHISPER_LOCAL_MODEL", "small").strip().lower() or "small"
+WHISPER_LOCAL_MODEL = _whisper_model
 
-# Min seconds between processing voice utterances (anti-spam)
-VOICE_UTTERANCE_COOLDOWN = _int_env("VOICE_UTTERANCE_COOLDOWN", 3)
-
-# Post heard+reply in text during /listen (default off — less chat spam)
-VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "false").strip().lower() in (
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+WHISPER_BEAM_SIZE = _int_env("WHISPER_BEAM_SIZE", 5)
+WHISPER_VAD_FILTER = os.getenv("WHISPER_VAD_FILTER", "true").strip().lower() in (
     "1",
     "true",
     "yes",
 )
 
+# Min seconds between processing voice utterances (anti-spam)
+VOICE_UTTERANCE_COOLDOWN = _int_env("VOICE_UTTERANCE_COOLDOWN", 3)
+
 # Error notice cooldown in text channel during listen
 VOICE_ERROR_COOLDOWN = _int_env("VOICE_ERROR_COOLDOWN", 60)
+
+# LLM request timeout (Ollama on CPU can be slow)
+LLM_TIMEOUT_SECONDS = _int_env("LLM_TIMEOUT_SECONDS", 180)
+
+# Slash replies only visible to the user who ran the command
+CHAT_EPHEMERAL = os.getenv("CHAT_EPHEMERAL", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Voice: post heard + reply in text (auto-delete = "whisper" style)
+VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+CHAT_WHISPER_DELETE_AFTER = _int_env("CHAT_WHISPER_DELETE_AFTER", 90)
 
 
 def require_env() -> list[str]:

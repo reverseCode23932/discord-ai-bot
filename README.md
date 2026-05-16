@@ -106,8 +106,17 @@ Copy `.env.example` to `.env`:
 | `LOG_MAX_BYTES` | No | Max log file size (bytes) |
 | `VOICE_WAKE_WORDS` | No | Comma-separated wake phrase(s) for `/listen` |
 | `VOICE_REPLY_TTS` | No | Speak AI replies in voice (`true`/`false`) |
-| `VOICE_REPLY_TEXT` | No | Post heard text + reply in chat |
-| `MIN_SPEECH_BYTES` | No | Min audio before Whisper (default ~0.4s) |
+| `VOICE_REPLY_TEXT` | No | Post heard text + reply in chat (whisper-style) |
+| `CHAT_WHISPER_DELETE_AFTER` | No | Auto-delete voice chat replies after N seconds (`90`) |
+| `CHAT_EPHEMERAL` | No | Slash replies only visible to you (`true`) |
+| `STT_ENGINE` | No | `local` (default), `google`, `openai`, `auto` |
+| `WHISPER_LOCAL_MODEL` | No | `small` (default), `base`, `medium`, `tiny` |
+| `WHISPER_DEVICE` | No | `cpu` or `cuda` (GPU) |
+| `WHISPER_COMPUTE_TYPE` | No | `int8` on CPU, `float16` on GPU |
+| `WHISPER_BEAM_SIZE` | No | Higher = more accurate, slower (default `5`) |
+| `WHISPER_VAD_FILTER` | No | Skip silence/noise (`true`) |
+| `LLM_TIMEOUT_SECONDS` | No | Max wait for Ollama/Groq reply (default `180`) |
+| `MIN_SPEECH_BYTES` | No | Min audio before STT (default ~0.4s) |
 
 ## Commands
 
@@ -172,16 +181,72 @@ Copy `.env.example` to `.env`:
 
 1. Join a voice channel.
 2. Run `/listen` in a text channel (same server).
-3. Speak when Discord shows your **green speaking indicator**.
-4. The bot transcribes your speech (OpenAI Whisper), asks the AI, then replies in text and voice.
+3. Wait for the bot to join, then speak when Discord shows your **green speaking indicator**.
+4. The bot transcribes speech → asks the LLM → posts a short **chat whisper** (auto-deletes) and optionally **speaks** the reply in voice.
 
 Optional in `.env`:
 
 - `VOICE_WAKE_WORDS=hey bot` — only react after that phrase (comma-separated for multiple).
 - `VOICE_WAKE_WORDS=` (empty) — react to any speech.
-- Say **"stop listening"** or use `/stoplisten` to end.
+- Say **"стоп"** / **"stop listening"** or use `/stoplisten` to end.
 
-Requires: `discord-ext-voice-recv`, `davey`, FFmpeg, and OpenAI API (Whisper uses the same key).
+Requires: `discord-ext-voice-recv`, `davey`, FFmpeg, and `faster-whisper` (local STT — **no OpenAI key**).
+
+## Speech recognition tips (Whisper)
+
+The bot uses **local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)** by default (`STT_ENGINE=local`). Discord audio is converted to **mono 16 kHz** before transcription for better accuracy.
+
+### Pick a model size
+
+| Model | Speed | Russian accuracy | RAM (approx.) |
+|-------|-------|------------------|---------------|
+| `tiny` | Fastest | Poor (hallucinations on silence) | ~1 GB |
+| `base` | Fast | OK | ~1 GB |
+| **`small`** | Medium | **Recommended** (default) | ~2 GB |
+| `medium` | Slow | Best local quality | ~5 GB |
+
+In `.env`:
+
+```env
+STT_ENGINE=local
+WHISPER_LOCAL_MODEL=small
+WHISPER_VAD_FILTER=true
+WHISPER_BEAM_SIZE=5
+```
+
+First run downloads the model (~500 MB for `small`). Check logs:
+
+```text
+Loading local Whisper 'small' (device=cpu compute=int8...)
+local STT (12 chars): привет как дела
+```
+
+### `.env` gotchas
+
+- **Do not duplicate** `WHISPER_LOCAL_MODEL` — if it appears twice, only the **first** line wins (dotenv default). Keep one line.
+- Set `/language ru` (or your code) so Whisper uses the right language hint.
+- If recognition is still weak, try `WHISPER_LOCAL_MODEL=medium` or enable GPU:
+
+  ```env
+  WHISPER_DEVICE=cuda
+  WHISPER_COMPUTE_TYPE=float16
+  ```
+
+### Speaking tips
+
+- Use a **headset mic**; avoid music or TV in the background.
+- Speak **1–2 seconds** after the green ring appears; pause briefly between phrases.
+- Wait for Ollama on CPU — the first reply can take **30–60+ seconds**; do not `/stoplisten` too early.
+
+### Alternative: Google STT (no local model download)
+
+Requires internet; often good for short Russian phrases:
+
+```env
+STT_ENGINE=google
+```
+
+Install: `pip install SpeechRecognition`
 
 ## Project structure
 
@@ -219,43 +284,85 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 | Voice error **4017** / cannot join VC | `pip install davey` and `discord.py>=2.7` |
 | `/listen` does nothing | Install `discord-ext-voice-recv`; speak when green ring shows |
 | `OpusError: corrupted stream` | Reinstall deps from `requirements.txt` (DAVE-patched voice-recv fork) |
-| Voice silent / no audio | Install FFmpeg and ensure it is on `PATH` |
+| Voice silent / no audio | Install FFmpeg and ensure it is on `PATH`; wait for LLM (check logs for `LLM reply`) |
+| Wrong / nonsense transcription | Use `WHISPER_LOCAL_MODEL=small` or `medium`; remove duplicate `.env` lines; see [Speech recognition tips](#speech-recognition-tips-whisper) |
+| Hallucinations like «Редактор субтитров» | Normal for `tiny` on silence — upgrade model; bot filters common phrases |
 | `Missing env vars` | Create `.env` from `.env.example` |
-| OpenAI 429 / quota | Switch to `LLM_PROVIDER=ollama` or `groq` |
-| Ollama connection | Run `ollama serve` and `ollama pull <model>` |
+| OpenAI 429 / quota | Switch to `LLM_PROVIDER=ollama` or `groq`; use `STT_ENGINE=local` |
+| Ollama connection / no voice reply | Run `ollama serve` and `ollama pull llama3.2`; increase `LLM_TIMEOUT_SECONDS` |
+| `gh` not recognized | Close/reopen terminal or use full path to `gh.exe` (see below) |
 
-## Publish to GitHub
+## GitHub — clone, update, and push
 
-Git is already initialized locally with an initial commit. To push to GitHub:
+### Clone this repo
 
-1. Install [GitHub CLI](https://cli.github.com/) (or `winget install GitHub.cli`)
-2. Log in (works even if `gh` is not on PATH yet):
+```powershell
+git clone https://github.com/reverseCode23932/discord-ai-bot.git
+cd discord-ai-bot
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+# Edit .env — never commit real tokens
+```
+
+### Daily workflow (after you change code)
+
+```powershell
+cd C:\path\to\discord-ai-bot
+git status
+git add .
+git commit -m "describe your change"
+git push
+```
+
+**Never commit `.env`** — it is gitignored. Only commit `.env.example` with placeholders.
+
+### First-time publish (new fork)
+
+1. Install [GitHub CLI](https://cli.github.com/) (`winget install GitHub.cli`)
+2. Log in:
 
    ```powershell
    cd C:\Users\Gleb\discord-ai-bot
    .\scripts\gh-login.ps1
    ```
 
-   Or use the full path after install:
+   Or:
 
    ```powershell
    & "C:\Program Files\GitHub CLI\gh.exe" auth login
    ```
 
-   **If `gh` is not recognized:** close and reopen PowerShell, or use the scripts above.
+   **If `gh` is not recognized:** close and reopen PowerShell, or use the scripts in `scripts/`.
 
-3. Create the remote repo and push:
+3. Create repo and push:
 
    ```powershell
    .\scripts\publish-to-github.ps1
    ```
 
-   Or manually: create an empty repo on github.com, then:
+   Or manually:
 
    ```powershell
    git remote add origin https://github.com/<your-username>/discord-ai-bot.git
+   git branch -M main
    git push -u origin main
    ```
+
+### Pull updates from GitHub
+
+```powershell
+git pull origin main
+pip install -r requirements.txt
+```
+
+If you use a venv in another folder (e.g. `Envs\dsbot`), activate it and reinstall there too.
+
+### Issues & contributions on GitHub
+
+- **Bug reports:** open an [Issue](https://github.com/reverseCode23932/discord-ai-bot/issues) with logs from `data/logs/bot.log` (remove your bot token first).
+- **Pull requests:** fork → branch → commit → PR. Keep changes focused; do not include `.env` or `data/`.
 
 ## License
 

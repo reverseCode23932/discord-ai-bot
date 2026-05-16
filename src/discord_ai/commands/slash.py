@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from discord_ai.bot.client import AIBot
+from discord_ai.config import CHAT_EPHEMERAL
 from discord_ai.i18n.languages import language_list_text, resolve_language
 from discord_ai.services.ai import ask_ai
 from discord_ai.services.history import history
@@ -16,6 +17,10 @@ from discord_ai.services.voice_deps import check_voice_dependencies
 from discord_ai.logging_setup import get_logger
 
 log = get_logger("commands.slash")
+
+
+def _ephemeral_kwargs() -> dict[str, bool]:
+    return {"ephemeral": True} if CHAT_EPHEMERAL else {}
 
 
 def _log_invocation(interaction: discord.Interaction, command: str, **fields: object) -> None:
@@ -39,9 +44,11 @@ def register_slash(bot: AIBot) -> None:
         try:
             reply = await ask_ai(interaction.channel_id, interaction.user.id, question)
         except Exception as exc:
-            await interaction.followup.send(f"AI error: {exc}")
+            await interaction.followup.send(
+                f"AI error: {exc}", **_ephemeral_kwargs()
+            )
             return
-        await interaction.followup.send(reply)
+        await interaction.followup.send(reply, **_ephemeral_kwargs())
 
     @bot.tree.command(
         name="say", description="Speak text in voice (your language + synthesizer)"
@@ -61,9 +68,11 @@ def register_slash(bot: AIBot) -> None:
         try:
             reply = await ask_ai(interaction.channel_id, interaction.user.id, question)
         except Exception as exc:
-            await interaction.followup.send(f"AI error: {exc}")
+            await interaction.followup.send(
+                f"AI error: {exc}", **_ephemeral_kwargs()
+            )
             return
-        await interaction.followup.send(reply)
+        await interaction.followup.send(reply, **_ephemeral_kwargs())
         await play_tts_in_voice(
             bot, bot.temp_dir, interaction, reply, already_deferred=True
         )

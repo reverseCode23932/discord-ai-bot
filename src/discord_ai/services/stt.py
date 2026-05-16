@@ -7,7 +7,15 @@ from pathlib import Path
 
 from openai import OpenAI, RateLimitError
 
-from discord_ai.config import OPENAI_API_KEY, STT_ENGINE, WHISPER_LOCAL_MODEL
+from discord_ai.config import (
+    OPENAI_API_KEY,
+    STT_ENGINE,
+    WHISPER_BEAM_SIZE,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_DEVICE,
+    WHISPER_LOCAL_MODEL,
+    WHISPER_VAD_FILTER,
+)
 from discord_ai.logging_setup import get_logger
 
 log = get_logger("stt")
@@ -136,8 +144,17 @@ def _get_local_model():
     if _local_model is None:
         from faster_whisper import WhisperModel
 
-        log.info("Loading local Whisper model '%s' (first run may download files)...", WHISPER_LOCAL_MODEL)
-        _local_model = WhisperModel(WHISPER_LOCAL_MODEL, device="cpu", compute_type="int8")
+        log.info(
+            "Loading local Whisper '%s' (device=%s compute=%s; first run may download)...",
+            WHISPER_LOCAL_MODEL,
+            WHISPER_DEVICE,
+            WHISPER_COMPUTE_TYPE,
+        )
+        _local_model = WhisperModel(
+            WHISPER_LOCAL_MODEL,
+            device=WHISPER_DEVICE,
+            compute_type=WHISPER_COMPUTE_TYPE,
+        )
     return _local_model
 
 
@@ -146,11 +163,26 @@ def _local_transcribe(wav_path: Path, language: str | None) -> str:
         raise STTNotConfiguredError("pip install faster-whisper")
 
     model = _get_local_model()
-    kwargs: dict = {}
+    kwargs: dict = {
+        "beam_size": WHISPER_BEAM_SIZE,
+        "vad_filter": WHISPER_VAD_FILTER,
+        # Reduces chained hallucinations between utterances
+        "condition_on_previous_text": False,
+        "temperature": 0.0,
+    }
     if language:
         kwargs["language"] = language
-    segments, _ = model.transcribe(str(wav_path), **kwargs)
-    return " ".join(segment.text.strip() for segment in segments).strip()
+    segments, info = model.transcribe(str(wav_path), **kwargs)
+    text = " ".join(segment.text.strip() for segment in segments).strip()
+    prob = getattr(info, "language_probability", None)
+    if prob is not None:
+        log.debug(
+            "Whisper lang=%s prob=%.2f duration=%.2fs",
+            getattr(info, "language", language),
+            prob,
+            getattr(info, "duration", 0.0),
+        )
+    return text
 
 
 def _is_quota_error(exc: RateLimitError) -> bool:

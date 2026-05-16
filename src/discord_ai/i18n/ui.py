@@ -30,7 +30,9 @@ UI: dict[str, dict[str, str]] = {
             "and set `STT_ENGINE=local` in `.env` (works without OpenAI)."
         ),
         "heard_reply": "**Heard:** {heard}\n**Reply:** {reply}",
+        "voice_whisper": "{mention} **heard:** {heard}\n**reply:** {reply}",
         "ai_error": "AI error: {error}",
+        "llm_timeout": "AI took too long to respond. Check Ollama (`ollama serve`) or increase `LLM_TIMEOUT_SECONDS`.",
         "llm_quota": (
             "OpenAI quota exhausted. Use **Ollama** (free/local) or **Groq** (free tier).\n"
             "See README — set `LLM_PROVIDER=ollama` in `.env`."
@@ -64,7 +66,9 @@ UI: dict[str, dict[str, str]] = {
             "и укажите `STT_ENGINE=local` в `.env` (без OpenAI)."
         ),
         "heard_reply": "**Услышал:** {heard}\n**Ответ:** {reply}",
+        "voice_whisper": "{mention} **услышал:** {heard}\n**ответ:** {reply}",
         "ai_error": "Ошибка AI: {error}",
+        "llm_timeout": "AI слишком долго отвечает. Проверьте Ollama (`ollama serve`) или увеличьте `LLM_TIMEOUT_SECONDS`.",
         "llm_quota": (
             "Квота OpenAI исчерпана. Используйте **Ollama** (бесплатно, локально) или **Groq**.\n"
             "В `.env`: `LLM_PROVIDER=ollama` — см. README."
@@ -98,7 +102,9 @@ UI: dict[str, dict[str, str]] = {
             "і вкажіть `STT_ENGINE=local` у `.env` (без OpenAI)."
         ),
         "heard_reply": "**Почув:** {heard}\n**Відповідь:** {reply}",
+        "voice_whisper": "{mention} **почув:** {heard}\n**відповідь:** {reply}",
         "ai_error": "Помилка AI: {error}",
+        "llm_timeout": "AI занадто довго відповідає. Перевірте Ollama або збільште `LLM_TIMEOUT_SECONDS`.",
         "llm_quota": (
             "Квоту OpenAI вичерпано. Використайте **Ollama** або **Groq**.\n"
             "У `.env`: `LLM_PROVIDER=ollama`."
