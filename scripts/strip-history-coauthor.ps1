@@ -4,7 +4,8 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 $env:FILTER_BRANCH_SQUELCH_WARNING = "1"
-git filter-branch -f --msg-filter "python `"$PWD\scripts\strip-coauthor.py`"" -- --all
+# sed works with Git for Windows; avoids path issues in filter-branch temp dirs
+git filter-branch -f --msg-filter "sed '/Co-authored-by: Cursor/d'" -- --all
 
 Write-Host "Done. Verify:" -ForegroundColor Green
 git log --format=%B | Select-String "Co-authored-by: Cursor"
