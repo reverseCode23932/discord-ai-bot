@@ -122,6 +122,10 @@ def init_stt() -> None:
         log.warning("Local STT unavailable — pip install faster-whisper")
     if STT_ENGINE == "local":
         log.info("STT uses local Whisper only — no OpenAI key required")
+    if STT_ENGINE == "hybrid":
+        log.info(
+            "STT hybrid: Google first, then Whisper (recognition is NOT Ollama — Ollama is text AI only)"
+        )
 
 
 def _openai_transcribe(wav_path: Path, language: str | None) -> str:
@@ -149,10 +153,12 @@ def _google_transcribe(wav_path: Path, language: str | None) -> str:
     import speech_recognition as sr
 
     recognizer = sr.Recognizer()
+    recognizer.dynamic_energy_threshold = True
+    recognizer.pause_threshold = 0.6
     google_lang = _GOOGLE_LANG.get(language or "en", "en-US")
     with sr.AudioFile(str(wav_path)) as source:
         audio = recognizer.record(source)
-    text = recognizer.recognize_google(audio, language=google_lang)
+    text = recognizer.recognize_google(audio, language=google_lang, show_all=False)
     return (text or "").strip()
 
 
@@ -296,6 +302,11 @@ def _local_transcribe(wav_path: Path, language: str | None) -> str:
         kwargs["language"] = language
     if prompt:
         kwargs["initial_prompt"] = prompt
+    if WHISPER_VAD_FILTER:
+        kwargs["vad_parameters"] = {
+            "min_silence_duration_ms": 300,
+            "speech_pad_ms": 400,
+        }
 
     try:
         model = _get_local_model()
@@ -332,8 +343,34 @@ async def _run(engine: str, wav_path: Path, language: str | None) -> str:
     raise ValueError(f"Unknown STT engine: {engine}")
 
 
+async def _hybrid_transcribe(wav_path: Path, language: str | None) -> str:
+    """Google Speech (clear short phrases) then local Whisper as fallback."""
+    from discord_ai.services.stt_filters import is_valid_transcript
+
+    if _probe_google():
+        try:
+            text = await _run("google", wav_path, language)
+            if text and is_valid_transcript(text):
+                log.info("hybrid STT via Google (%d chars): %s", len(text), text[:120])
+                return text
+            if text:
+                log.info("Google heard (filtered): %s", text[:80])
+        except Exception as exc:
+            log.warning("Google STT failed in hybrid mode: %s", exc)
+
+    if _probe_local():
+        text = await _run("local", wav_path, language)
+        log.info("hybrid STT via Whisper (%d chars): %s", len(text), text[:120])
+        return text
+
+    raise STTNotConfiguredError("hybrid needs SpeechRecognition and faster-whisper")
+
+
 async def transcribe_wav(wav_path: Path, *, language: str | None = None) -> str:
     global _openai_stt_disabled
+
+    if STT_ENGINE == "hybrid":
+        return await _hybrid_transcribe(wav_path, language)
 
     if STT_ENGINE in ("openai", "google", "local"):
         text = await _run(STT_ENGINE, wav_path, language)

@@ -71,10 +71,13 @@ VOICE_REPLY_TTS = os.getenv("VOICE_REPLY_TTS", "true").strip().lower() in ("1", 
 # ~0.5s stereo 48 kHz — slightly longer clips help Whisper
 MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 96_000)
 
-# openai | google | local | auto (openai -> google -> local)
-STT_ENGINE = os.getenv("STT_ENGINE", "local").strip().lower()
-if STT_ENGINE not in ("openai", "google", "local", "auto"):
-    STT_ENGINE = "local"
+# hybrid = Google first (often best for RU), then Whisper | google | local | auto
+STT_ENGINE = os.getenv("STT_ENGINE", "hybrid").strip().lower()
+if STT_ENGINE not in ("openai", "google", "local", "auto", "hybrid"):
+    STT_ENGINE = "hybrid"
+
+# Capture audio briefly after you stop speaking (Discord sends late packets)
+VOICE_POST_ROLL_MS = _int_env("VOICE_POST_ROLL_MS", 400)
 
 # tiny/base=fast | small=balanced | medium=clearest (good on RTX GPU)
 _whisper_model = os.getenv("WHISPER_LOCAL_MODEL", "medium").strip().lower() or "medium"

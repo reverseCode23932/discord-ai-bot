@@ -14,7 +14,9 @@ from discord_ai.config import (
     CHAT_WHISPER_DELETE_AFTER,
     LLM_TIMEOUT_SECONDS,
     MIN_SPEECH_BYTES,
+    STT_ENGINE,
     VOICE_ERROR_COOLDOWN,
+    VOICE_POST_ROLL_MS,
     VOICE_REPLY_TEXT,
     VOICE_REPLY_TTS,
     VOICE_UTTERANCE_COOLDOWN,
@@ -86,12 +88,17 @@ if HAS_VOICE_RECV:
             *,
             target_user_id: int,
             on_utterance: Callable[[bytes], None],
+            loop: asyncio.AbstractEventLoop,
+            post_roll_ms: int = VOICE_POST_ROLL_MS,
         ) -> None:
             super().__init__()
             self.target_user_id = target_user_id
             self.on_utterance = on_utterance
+            self._loop = loop
+            self._post_roll_s = max(0.0, post_roll_ms / 1000.0)
             self._buffer = bytearray()
             self._speaking = False
+            self._flushing = False
 
         def wants_opus(self) -> bool:
             return False
@@ -99,7 +106,7 @@ if HAS_VOICE_RECV:
         def write(self, user: discord.User | discord.Member | None, data: voice_recv.VoiceData) -> None:
             if not user or user.id != self.target_user_id:
                 return
-            if not self._speaking:
+            if not self._speaking and not self._flushing:
                 return
             pcm = data.pcm
             if pcm:
@@ -108,11 +115,30 @@ if HAS_VOICE_RECV:
         def cleanup(self) -> None:
             self._buffer.clear()
             self._speaking = False
+            self._flushing = False
+
+        def _emit_utterance(self, pcm: bytes, member_id: int) -> None:
+            if len(pcm) < MIN_SPEECH_BYTES:
+                log.debug("Speech too short (%d bytes), ignored", len(pcm))
+                return
+            log.debug("Utterance ready (user=%s, %d bytes)", member_id, len(pcm))
+            self.on_utterance(pcm)
+
+        async def _flush_after_post_roll(self, member_id: int) -> None:
+            if self._post_roll_s > 0:
+                await asyncio.sleep(self._post_roll_s)
+            if self._speaking:
+                return
+            self._flushing = False
+            pcm = bytes(self._buffer)
+            self._buffer.clear()
+            self._emit_utterance(pcm, member_id)
 
         @voice_recv.AudioSink.listener()
         def on_voice_member_speaking_start(self, member: discord.Member) -> None:
             if member.id != self.target_user_id:
                 return
+            self._flushing = False
             self._buffer.clear()
             self._speaking = True
             log.debug("Speaking started (user=%s)", member.id)
@@ -122,13 +148,12 @@ if HAS_VOICE_RECV:
             if member.id != self.target_user_id:
                 return
             self._speaking = False
-            pcm = bytes(self._buffer)
-            self._buffer.clear()
-            if len(pcm) < MIN_SPEECH_BYTES:
-                log.debug("Speech too short (%d bytes), ignored", len(pcm))
-                return
-            log.debug("Speaking stopped (user=%s, %d bytes)", member.id, len(pcm))
-            self.on_utterance(pcm)
+            self._flushing = True
+            log.debug("Speaking stopped (user=%s), post-roll %.0fms", member.id, self._post_roll_s * 1000)
+            asyncio.run_coroutine_threadsafe(
+                self._flush_after_post_roll(member.id),
+                self._loop,
+            )
 
 
 @dataclass
@@ -188,6 +213,7 @@ class VoiceListenManager:
         sink = CommandListenSink(
             target_user_id=session.user_id,
             on_utterance=self._make_on_utterance(session),
+            loop=self.bot.loop,
         )
         session.sink = sink
 
@@ -281,10 +307,11 @@ class VoiceListenManager:
         self._begin_listen(vc, session)
 
         log.info(
-            "Listen started (guild=%s user=%s channel=%s)",
+            "Listen started (guild=%s user=%s channel=%s stt=%s — not Ollama)",
             guild_id,
             session.user_id,
             channel.id,
+            STT_ENGINE,
         )
 
         if VOICE_WAKE_WORDS:

@@ -194,7 +194,7 @@ Requires: `discord-ext-voice-recv`, `davey`, FFmpeg, and `faster-whisper` (local
 
 ## Speech recognition tips (Whisper)
 
-The bot uses **local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)** by default (`STT_ENGINE=local`). Discord audio is converted to **mono 16 kHz** before transcription for better accuracy.
+Voice recognition uses **Google Speech + Whisper** (`STT_ENGINE=hybrid` by default) — **not Ollama**. Ollama only generates text replies after speech is already transcribed. Discord audio is converted to **mono 16 kHz** with volume boost before STT.
 
 ### Pick a model size
 

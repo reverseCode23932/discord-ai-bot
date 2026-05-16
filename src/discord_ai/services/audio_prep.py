@@ -15,12 +15,23 @@ SAMPLE_WIDTH = 2
 WHISPER_SAMPLE_RATE = 16_000
 
 
+def _normalize_pcm(mono: bytes) -> bytes:
+    """Boost quiet Discord mic audio so STT hears speech more clearly."""
+    rms = audioop.rms(mono, SAMPLE_WIDTH)
+    if rms < 80:
+        return mono
+    target = 2800
+    gain = min(4.0, max(1.0, target / rms))
+    return audioop.mul(mono, SAMPLE_WIDTH, gain)
+
+
 def discord_pcm_to_whisper_wav(pcm: bytes) -> bytes:
     """Downmix stereo 48 kHz PCM to mono 16 kHz WAV."""
     if not pcm:
         return b""
 
     mono = audioop.tomono(pcm, SAMPLE_WIDTH, 0.5, 0.5)
+    mono = _normalize_pcm(mono)
     resampled, _ = audioop.ratecv(
         mono,
         SAMPLE_WIDTH,
