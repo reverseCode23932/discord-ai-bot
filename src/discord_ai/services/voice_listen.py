@@ -1,0 +1,313 @@
+"""Listen in voice channels and run voice commands (STT -> AI -> optional TTS)."""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import wave
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable
+
+import discord
+
+from discord_ai.config import (
+    MIN_SPEECH_BYTES,
+    VOICE_REPLY_TEXT,
+    VOICE_REPLY_TTS,
+    VOICE_WAKE_WORDS,
+)
+from discord_ai.i18n.languages import resolve_language
+from discord_ai.logging_setup import get_logger
+from discord_ai.services.ai import ask_ai
+from discord_ai.services.settings import settings
+from discord_ai.services.stt import transcribe_wav
+from discord_ai.services.voice_connect import HAS_VOICE_RECV, connect_voice_channel
+from discord_ai.tts.synthesizer import synthesize
+
+if TYPE_CHECKING:
+    from discord_ai.bot.client import AIBot
+
+if HAS_VOICE_RECV:
+    from discord.ext import voice_recv
+
+log = get_logger("voice.listen")
+
+SAMPLE_RATE = 48_000
+CHANNELS = 2
+SAMPLE_WIDTH = 2
+
+
+def _strip_wake_word(text: str) -> str | None:
+    if not VOICE_WAKE_WORDS:
+        return text.strip() or None
+    lower = text.lower()
+    for word in VOICE_WAKE_WORDS:
+        w = word.lower()
+        if lower.startswith(w):
+            rest = text[len(w) :].lstrip(" ,.:;!?-")
+            return rest.strip() or None
+        if w in lower:
+            idx = lower.index(w)
+            rest = text[idx + len(w) :].lstrip(" ,.:;!?-")
+            return rest.strip() or None
+    return None
+
+
+def pcm_to_wav(pcm: bytes) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(pcm)
+    return buf.getvalue()
+
+
+if HAS_VOICE_RECV:
+
+    class CommandListenSink(voice_recv.AudioSink):
+        """Buffer one user's speech between speaking-start/stop events."""
+
+        def __init__(
+            self,
+            *,
+            target_user_id: int,
+            on_utterance: Callable[[bytes], None],
+        ) -> None:
+            super().__init__()
+            self.target_user_id = target_user_id
+            self.on_utterance = on_utterance
+            self._buffer = bytearray()
+            self._speaking = False
+
+        def wants_opus(self) -> bool:
+            return False
+
+        def write(self, user: discord.User | discord.Member | None, data: voice_recv.VoiceData) -> None:
+            if not user or user.id != self.target_user_id:
+                return
+            if not self._speaking:
+                return
+            pcm = data.pcm
+            if pcm:
+                self._buffer.extend(pcm)
+
+        def cleanup(self) -> None:
+            self._buffer.clear()
+            self._speaking = False
+
+        @voice_recv.AudioSink.listener()
+        def on_voice_member_speaking_start(self, member: discord.Member) -> None:
+            if member.id != self.target_user_id:
+                return
+            self._buffer.clear()
+            self._speaking = True
+            log.debug("Speaking started (user=%s)", member.id)
+
+        @voice_recv.AudioSink.listener()
+        def on_voice_member_speaking_stop(self, member: discord.Member) -> None:
+            if member.id != self.target_user_id:
+                return
+            self._speaking = False
+            pcm = bytes(self._buffer)
+            self._buffer.clear()
+            if len(pcm) < MIN_SPEECH_BYTES:
+                log.debug("Speech too short (%d bytes), ignored", len(pcm))
+                return
+            log.debug("Speaking stopped (user=%s, %d bytes)", member.id, len(pcm))
+            self.on_utterance(pcm)
+
+
+@dataclass
+class ListenSession:
+    guild_id: int
+    user_id: int
+    text_channel_id: int
+    sink: object
+
+
+class VoiceListenManager:
+    def __init__(self, bot: AIBot) -> None:
+        self.bot = bot
+        self.sessions: dict[int, ListenSession] = {}
+
+    def is_listening(self, guild_id: int) -> bool:
+        return guild_id in self.sessions
+
+    async def start(
+        self,
+        interaction: discord.Interaction,
+        *,
+        reply_in_voice: bool | None = None,
+    ) -> str:
+        if not HAS_VOICE_RECV:
+            raise RuntimeError(
+                "Install voice receive: pip install discord-ext-voice-recv"
+            )
+        if not interaction.guild or not interaction.user.voice:
+            raise RuntimeError("Join a voice channel first.")
+
+        channel = interaction.user.voice.channel
+        if not isinstance(channel, discord.VoiceChannel):
+            raise RuntimeError("Invalid voice channel.")
+
+        guild_id = interaction.guild.id
+        await self.stop(guild_id)
+
+        vc = await connect_voice_channel(channel)
+        text_channel_id = interaction.channel_id  # type: ignore[assignment]
+        user_id = interaction.user.id
+
+        def on_utterance(pcm: bytes) -> None:
+            asyncio.run_coroutine_threadsafe(
+                self._handle_utterance(
+                    guild_id,
+                    user_id,
+                    text_channel_id,
+                    pcm,
+                    reply_in_voice=reply_in_voice,
+                ),
+                self.bot.loop,
+            )
+
+        sink = CommandListenSink(
+            target_user_id=user_id,
+            on_utterance=on_utterance,
+        )
+        vc.listen(sink)
+
+        self.sessions[guild_id] = ListenSession(
+            guild_id=guild_id,
+            user_id=user_id,
+            text_channel_id=text_channel_id,
+            sink=sink,
+        )
+        log.info(
+            "Listen started (guild=%s user=%s channel=%s)",
+            guild_id,
+            user_id,
+            channel.id,
+        )
+
+        wake = (
+            f" Say **{VOICE_WAKE_WORDS[0]}** first, then your command."
+            if VOICE_WAKE_WORDS
+            else " Speak your question when the green circle appears."
+        )
+        return (
+            f"Listening in **{channel.name}** for <@{user_id}>.{wake}\n"
+            "Use `/stoplisten` or `/leave` to stop."
+        )
+
+    async def stop(self, guild_id: int) -> bool:
+        session = self.sessions.pop(guild_id, None)
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return session is not None
+
+        vc = guild.voice_client
+        if vc and HAS_VOICE_RECV and isinstance(vc, voice_recv.VoiceRecvClient):
+            if vc.is_listening():
+                vc.stop_listening()
+        if session:
+            log.info("Listen stopped (guild=%s)", guild_id)
+        return session is not None
+
+    async def _handle_utterance(
+        self,
+        guild_id: int,
+        user_id: int,
+        text_channel_id: int,
+        pcm: bytes,
+        *,
+        reply_in_voice: bool | None,
+    ) -> None:
+        session = self.sessions.get(guild_id)
+        if not session or session.user_id != user_id:
+            return
+
+        text_channel = self.bot.get_channel(text_channel_id)
+        if not isinstance(text_channel, discord.TextChannel):
+            return
+
+        wav_path = self.bot.temp_dir / f"stt_{guild_id}_{user_id}.wav"
+        try:
+            wav_path.write_bytes(pcm_to_wav(pcm))
+            lang = settings.get(user_id).language
+            raw = await transcribe_wav(wav_path, language=lang)
+        except Exception:
+            log.exception("STT failed (guild=%s user=%s)", guild_id, user_id)
+            await text_channel.send("I couldn't understand that — try again.")
+            return
+        finally:
+            wav_path.unlink(missing_ok=True)
+
+        if not raw:
+            return
+
+        command = _strip_wake_word(raw)
+        if command is None:
+            log.debug("Ignored (no wake word): %s", raw[:80])
+            return
+
+        stop_phrases = {"stop listening", "stop listen", "stop", "quiet", "shut up"}
+        if command.lower() in stop_phrases:
+            await self.stop(guild_id)
+            await text_channel.send("Stopped listening.")
+            return
+
+        log.info("Voice command (user=%s): %s", user_id, command[:120])
+
+        try:
+            reply = await ask_ai(text_channel_id, user_id, command)
+        except Exception as exc:
+            log.exception("AI failed for voice command")
+            await text_channel.send(f"AI error: {exc}")
+            return
+
+        use_tts = VOICE_REPLY_TTS if reply_in_voice is None else reply_in_voice
+        if VOICE_REPLY_TEXT:
+            await text_channel.send(f"**Heard:** {command}\n**Reply:** {reply}")
+
+        if use_tts:
+            guild = self.bot.get_guild(guild_id)
+            vc = guild.voice_client if guild else None
+            if vc and vc.is_connected():
+                await _play_tts_on_vc(self.bot, vc, user_id, reply)
+
+
+async def _play_tts_on_vc(
+    bot: AIBot,
+    voice_client: discord.VoiceClient,
+    user_id: int,
+    text: str,
+) -> None:
+    prefs = settings.get(user_id)
+    preset = resolve_language(prefs.language)
+    audio_file = bot.temp_dir / f"tts_listen_{user_id}.mp3"
+
+    try:
+        await synthesize(
+            text,
+            audio_file,
+            engine=prefs.synthesizer,  # type: ignore[arg-type]
+            preset=preset,
+            edge_voice=prefs.edge_voice(),
+        )
+        if voice_client.is_playing():
+            if hasattr(voice_client, "stop_playing"):
+                voice_client.stop_playing()
+            else:
+                voice_client.stop()
+        done = asyncio.Event()
+
+        def after_play(_err: Exception | None) -> None:
+            done.set()
+
+        voice_client.play(discord.FFmpegPCMAudio(str(audio_file)), after=lambda e: after_play(e))
+        await done.wait()
+    except Exception:
+        log.exception("TTS playback failed during listen mode")
+    finally:
+        audio_file.unlink(missing_ok=True)

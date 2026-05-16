@@ -39,6 +39,16 @@ BASE_SYSTEM_PROMPT = (
 MAX_HISTORY = 12
 MAX_REPLY_CHARS = 1900
 
+# Voice listen (STT) — comma-separated wake words; empty = react to any speech
+_wake = os.getenv("VOICE_WAKE_WORDS", "").strip()
+VOICE_WAKE_WORDS: tuple[str, ...] = tuple(w.strip() for w in _wake.split(",") if w.strip())
+
+VOICE_REPLY_TTS = os.getenv("VOICE_REPLY_TTS", "true").strip().lower() in ("1", "true", "yes")
+VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "true").strip().lower() in ("1", "true", "yes")
+
+# ~0.4s of stereo 48kHz 16-bit PCM minimum before sending to Whisper
+MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 76_800)
+
 
 def require_env() -> list[str]:
     missing = []

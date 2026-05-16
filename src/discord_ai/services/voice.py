@@ -6,10 +6,13 @@ import asyncio
 from pathlib import Path
 
 import discord
+from discord.errors import ConnectionClosed
 
 from discord_ai.i18n.languages import resolve_language
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.settings import settings
+from discord_ai.services.voice_connect import connect_voice_channel
+from discord_ai.services.voice_deps import check_voice_dependencies
 from discord_ai.tts.synthesizer import synthesize
 
 log = get_logger("voice")
@@ -56,16 +59,37 @@ async def play_tts_in_voice(
         len(text),
     )
 
+    missing = check_voice_dependencies()
+    if missing:
+        msg = (
+            "Voice is not configured on this machine. Install:\n"
+            + "\n".join(f"- {m}" for m in missing)
+            + "\n\nThen restart the bot."
+        )
+        if already_deferred:
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return
+
     if not already_deferred:
         await interaction.response.defer(thinking=True)
 
-    voice_client = interaction.guild.voice_client
-    if voice_client and voice_client.channel != channel:
-        log.debug("Moving voice client to channel %s", channel.id)
-        await voice_client.move_to(channel)
-    elif not voice_client:
-        log.debug("Connecting to voice channel %s", channel.id)
-        voice_client = await channel.connect()
+    try:
+        voice_client = await connect_voice_channel(channel)
+    except ConnectionClosed as exc:
+        if getattr(exc, "code", None) == 4017:
+            log.error("Voice 4017: DAVE/E2EE required — install davey")
+            await interaction.followup.send(
+                "Cannot join voice: Discord requires **davey** for encrypted voice.\n"
+                "Run: `pip install -U \"discord.py[voice]\" davey PyNaCl` then restart.",
+                ephemeral=True,
+            )
+            return
+        raise
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
+        return
 
     preset = resolve_language(prefs.language)
     audio_file = temp_dir / f"tts_{interaction.id}.mp3"
@@ -81,7 +105,10 @@ async def play_tts_in_voice(
         log.debug("TTS audio saved: %s (%d bytes)", audio_file, audio_file.stat().st_size)
 
         if voice_client.is_playing():
-            voice_client.stop()
+            if hasattr(voice_client, "stop_playing"):
+                voice_client.stop_playing()
+            else:
+                voice_client.stop()
         source = discord.FFmpegPCMAudio(str(audio_file))
         done = asyncio.Event()
 

@@ -15,6 +15,8 @@ from discord_ai.commands import register_commands
 from discord_ai.config import DISCORD_TOKEN, OPENAI_MODEL, require_env
 from discord_ai.logging_setup import get_logger, setup_logging
 from discord_ai.services.ai import init_openai
+from discord_ai.services.stt import init_stt
+from discord_ai.services.voice_deps import log_voice_dependency_status
 
 
 def main() -> None:
@@ -30,7 +32,9 @@ def main() -> None:
         )
 
     log.info("Starting bot (model=%s)", OPENAI_MODEL)
+    log_voice_dependency_status()
     init_openai()
+    init_stt()
     bot = AIBot()
     register_commands(bot)
     bot.run(DISCORD_TOKEN)

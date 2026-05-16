@@ -6,7 +6,8 @@ Uses an **official Discord bot token** from the [Developer Portal](https://disco
 
 ## Features
 
-- Slash commands: `/ask`, `/say`, `/askvoice`, `/language`, `/synthesizer`, `/voice`, `/settings`, `/reset`, `/leave`
+- Slash commands: `/ask`, `/say`, `/askvoice`, `/listen`, `/stoplisten`, `/language`, `/synthesizer`, `/voice`, `/settings`, `/reset`, `/leave`
+- **Voice listen**: join VC, hear your speech → Whisper STT → AI → optional TTS reply
 - Prefix commands: `!ask`, `!lang`, `!reset`
 - Mention or prefix triggers in text channels
 - Per-user language (en, ru, uk, de, fr, es, pt, ja, zh, pl, tr)
@@ -24,12 +25,13 @@ Uses an **official Discord bot token** from the [Developer Portal](https://disco
 ## Quick start
 
 ```powershell
-git clone https://github.com/<your-username>/discord-ai-bot.git
+git clone https://github.com/reverseCode23932/discord-ai-bot.git
 cd discord-ai-bot
 
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
+# Voice also needs FFmpeg on PATH and davey (included in requirements.txt)
 
 copy .env.example .env
 # Edit .env — add DISCORD_BOT_TOKEN and OPENAI_API_KEY
@@ -100,6 +102,10 @@ Copy `.env.example` to `.env`:
 | `LOG_LEVEL` | No | `INFO` or `DEBUG` |
 | `LOG_TO_FILE` | No | `true` / `false` |
 | `LOG_MAX_BYTES` | No | Max log file size (bytes) |
+| `VOICE_WAKE_WORDS` | No | Comma-separated wake phrase(s) for `/listen` |
+| `VOICE_REPLY_TTS` | No | Speak AI replies in voice (`true`/`false`) |
+| `VOICE_REPLY_TEXT` | No | Post heard text + reply in chat |
+| `MIN_SPEECH_BYTES` | No | Min audio before Whisper (default ~0.4s) |
 
 ## Commands
 
@@ -113,7 +119,24 @@ Copy `.env.example` to `.env`:
 | `/voice` | Pick Edge TTS voice |
 | `/settings` | Show your preferences |
 | `/reset` | Clear channel chat history |
-| `/leave` | Disconnect from voice |
+| `/listen` | Join your VC and listen for spoken commands |
+| `/stoplisten` | Stop voice listening |
+| `/leave` | Disconnect from voice and stop listening |
+
+## Voice commands (`/listen`)
+
+1. Join a voice channel.
+2. Run `/listen` in a text channel (same server).
+3. Speak when Discord shows your **green speaking indicator**.
+4. The bot transcribes your speech (OpenAI Whisper), asks the AI, then replies in text and voice.
+
+Optional in `.env`:
+
+- `VOICE_WAKE_WORDS=hey bot` — only react after that phrase (comma-separated for multiple).
+- `VOICE_WAKE_WORDS=` (empty) — react to any speech.
+- Say **"stop listening"** or use `/stoplisten` to end.
+
+Requires: `discord-ext-voice-recv`, `davey`, FFmpeg, and OpenAI API (Whisper uses the same key).
 
 ## Project structure
 
@@ -131,7 +154,7 @@ discord-ai-bot/
     ├── logging_setup.py
     ├── bot/client.py
     ├── commands/          # slash + prefix
-    ├── services/          # ai, voice, settings, history
+    ├── services/          # ai, voice, listen, stt, settings, history
     ├── i18n/languages.py
     └── tts/synthesizer.py
 ```
@@ -148,7 +171,9 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 |-------|-----|
 | Bot does not reply to `!ask` | Enable **Message Content Intent** in Developer Portal |
 | Slash commands missing | Re-invite with `applications.commands` scope; wait ~1 min after start |
-| Voice silent / errors | Install FFmpeg and ensure it is on `PATH` |
+| Voice error **4017** / cannot join VC | `pip install davey` and `discord.py>=2.7` |
+| `/listen` does nothing | Install `discord-ext-voice-recv`; speak when green ring shows |
+| Voice silent / no audio | Install FFmpeg and ensure it is on `PATH` |
 | `Missing env vars` | Create `.env` from `.env.example` |
 | OpenAI errors | Check API key and billing on OpenAI dashboard |
 

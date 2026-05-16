@@ -11,6 +11,7 @@ from discord.ext import commands
 from discord_ai.config import BOT_PREFIX
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.ai import ask_ai
+from discord_ai.services.voice_listen import VoiceListenManager
 
 log = get_logger("bot")
 
@@ -23,6 +24,7 @@ class AIBot(commands.Bot):
         super().__init__(command_prefix=BOT_PREFIX, intents=intents)
         self.temp_dir = Path(tempfile.gettempdir()) / "discord-ai-bot"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self.listen_manager = VoiceListenManager(self)
 
     async def setup_hook(self) -> None:
         await self.tree.sync()

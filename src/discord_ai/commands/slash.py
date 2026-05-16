@@ -11,6 +11,7 @@ from discord_ai.services.ai import ask_ai
 from discord_ai.services.history import history
 from discord_ai.services.settings import format_prefs, settings
 from discord_ai.services.voice import play_tts_in_voice
+from discord_ai.services.voice_deps import check_voice_dependencies
 from discord_ai.logging_setup import get_logger
 
 log = get_logger("commands.slash")
@@ -155,8 +156,54 @@ def register_slash(bot: AIBot) -> None:
         history.clear(interaction.channel_id)
         await interaction.response.send_message("History cleared.", ephemeral=True)
 
-    @bot.tree.command(name="leave", description="Leave the voice channel")
+    @bot.tree.command(
+        name="listen",
+        description="Join your voice channel and listen for your spoken commands",
+    )
+    @app_commands.describe(
+        reply_in_voice="Speak the AI reply in voice (default: on)",
+    )
+    async def slash_listen(
+        interaction: discord.Interaction,
+        reply_in_voice: bool = True,
+    ) -> None:
+        _log_invocation(interaction, "listen")
+        missing = check_voice_dependencies()
+        if missing:
+            await interaction.response.send_message(
+                "Voice listen needs:\n" + "\n".join(f"- {m}" for m in missing),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            msg = await bot.listen_manager.start(
+                interaction, reply_in_voice=reply_in_voice
+            )
+        except Exception as exc:
+            log.exception("Failed to start listening")
+            await interaction.followup.send(f"Could not start listening: {exc}")
+            return
+        await interaction.followup.send(msg)
+
+    @bot.tree.command(name="stoplisten", description="Stop listening for voice commands")
+    async def slash_stoplisten(interaction: discord.Interaction) -> None:
+        _log_invocation(interaction, "stoplisten")
+        if not interaction.guild:
+            await interaction.response.send_message("Use this in a server.", ephemeral=True)
+            return
+        stopped = await bot.listen_manager.stop(interaction.guild.id)
+        if stopped:
+            await interaction.response.send_message("Stopped listening for voice commands.")
+        else:
+            await interaction.response.send_message(
+                "Not listening in this server.", ephemeral=True
+            )
+
+    @bot.tree.command(name="leave", description="Leave voice and stop listening")
     async def slash_leave(interaction: discord.Interaction) -> None:
+        if interaction.guild:
+            await bot.listen_manager.stop(interaction.guild.id)
         if interaction.guild and interaction.guild.voice_client:
             await interaction.guild.voice_client.disconnect()
             await interaction.response.send_message("Left voice channel.")
