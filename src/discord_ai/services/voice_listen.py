@@ -29,6 +29,7 @@ from discord_ai.services.settings import settings
 from discord_ai.services.stt import STTQuotaError, transcribe_wav
 from discord_ai.services.stt_filters import is_valid_transcript
 from discord_ai.services.voice_connect import HAS_VOICE_RECV, connect_voice_channel
+from discord_ai.services.voice_playback import pcm_audio_source
 from discord_ai.tts.synthesizer import synthesize
 
 if TYPE_CHECKING:
@@ -471,7 +472,7 @@ async def _play_tts_on_vc(
         def after_play(_err: Exception | None) -> None:
             done.set()
 
-        voice_client.play(discord.FFmpegPCMAudio(str(audio_file)), after=lambda e: after_play(e))
+        voice_client.play(pcm_audio_source(str(audio_file)), after=lambda e: after_play(e))
         await done.wait()
     except Exception:
         log.exception("TTS playback failed during listen mode")

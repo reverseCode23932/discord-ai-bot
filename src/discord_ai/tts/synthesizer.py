@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Literal
 
+from discord_ai.config import EDGE_TTS_PITCH, EDGE_TTS_RATE, EDGE_TTS_VOLUME
 from discord_ai.i18n.languages import LanguagePreset
 from discord_ai.logging_setup import get_logger
 
@@ -46,8 +47,21 @@ async def synthesize(
 async def _edge(text: str, out_path: Path, voice: str) -> Path:
     import edge_tts
 
-    await edge_tts.Communicate(text, voice).save(str(out_path))
-    log.debug("Edge TTS done: %s", out_path.name)
+    communicate = edge_tts.Communicate(
+        text,
+        voice,
+        rate=EDGE_TTS_RATE,
+        volume=EDGE_TTS_VOLUME,
+        pitch=EDGE_TTS_PITCH,
+    )
+    await communicate.save(str(out_path))
+    log.debug(
+        "Edge TTS done: %s voice=%s rate=%s vol=%s",
+        out_path.name,
+        voice,
+        EDGE_TTS_RATE,
+        EDGE_TTS_VOLUME,
+    )
     return out_path
 
 

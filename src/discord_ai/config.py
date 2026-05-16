@@ -68,15 +68,16 @@ VOICE_WAKE_WORDS: tuple[str, ...] = tuple(w.strip() for w in _wake.split(",") if
 VOICE_REPLY_TTS = os.getenv("VOICE_REPLY_TTS", "true").strip().lower() in ("1", "true", "yes")
 
 # ~0.4s of stereo 48kHz 16-bit PCM minimum before sending to Whisper
-MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 76_800)
+# ~0.5s stereo 48 kHz — slightly longer clips help Whisper
+MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 96_000)
 
 # openai | google | local | auto (openai -> google -> local)
 STT_ENGINE = os.getenv("STT_ENGINE", "local").strip().lower()
 if STT_ENGINE not in ("openai", "google", "local", "auto"):
     STT_ENGINE = "local"
 
-# tiny=fast/inaccurate | base=ok | small=recommended for RU | medium=best if RAM allows
-_whisper_model = os.getenv("WHISPER_LOCAL_MODEL", "small").strip().lower() or "small"
+# tiny/base=fast | small=balanced | medium=clearest (good on RTX GPU)
+_whisper_model = os.getenv("WHISPER_LOCAL_MODEL", "medium").strip().lower() or "medium"
 WHISPER_LOCAL_MODEL = _whisper_model
 
 # cpu | cuda | auto (try GPU, fall back to CPU)
@@ -84,7 +85,8 @@ WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower() or "auto"
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "").strip()
 if not WHISPER_COMPUTE_TYPE:
     WHISPER_COMPUTE_TYPE = "float16" if WHISPER_DEVICE in ("cuda", "gpu", "auto") else "int8"
-WHISPER_BEAM_SIZE = _int_env("WHISPER_BEAM_SIZE", 5)
+WHISPER_BEAM_SIZE = _int_env("WHISPER_BEAM_SIZE", 8)
+WHISPER_INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip()
 WHISPER_VAD_FILTER = os.getenv("WHISPER_VAD_FILTER", "true").strip().lower() in (
     "1",
     "true",
@@ -108,12 +110,24 @@ CHAT_EPHEMERAL = os.getenv("CHAT_EPHEMERAL", "true").strip().lower() in (
 )
 
 # Voice: post heard + reply in text (auto-delete = "whisper" style)
-VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "true").strip().lower() in (
+VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "false").strip().lower() in (
     "1",
     "true",
     "yes",
 )
 CHAT_WHISPER_DELETE_AFTER = _int_env("CHAT_WHISPER_DELETE_AFTER", 90)
+
+# Edge neural TTS — slightly slower + louder = clearer in Discord voice
+EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "-10%").strip() or "-10%"
+EDGE_TTS_VOLUME = os.getenv("EDGE_TTS_VOLUME", "+12%").strip() or "+12%"
+EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "+0Hz").strip() or "+0Hz"
+DEFAULT_EDGE_VOICE = os.getenv("DEFAULT_EDGE_VOICE", "").strip()
+
+# FFmpeg filters applied when playing TTS in voice channels
+FFMPEG_PCM_OPTIONS = os.getenv(
+    "FFMPEG_PCM_OPTIONS",
+    "-filter:a aresample=48000,highpass=f=100,lowpass=f=14000,volume=1.25",
+).strip()
 
 
 def require_env() -> list[str]:

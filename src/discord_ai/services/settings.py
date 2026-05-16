@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from discord_ai.config import DATA_DIR
+from discord_ai.config import DATA_DIR, DEFAULT_EDGE_VOICE
 from discord_ai.i18n.languages import (
     DEFAULT_LANGUAGE,
     SYNTHESIZER_CHOICES,
@@ -37,8 +37,12 @@ class UserPrefs:
     voice: str | None = None
 
     def edge_voice(self) -> str:
+        if self.voice:
+            return self.voice
+        if DEFAULT_EDGE_VOICE:
+            return DEFAULT_EDGE_VOICE
         preset = resolve_language(self.language)
-        return self.voice or preset.edge_voice
+        return preset.edge_voice
 
 
 class SettingsStore:

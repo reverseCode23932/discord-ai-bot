@@ -13,6 +13,7 @@ from discord_ai.config import (
     WHISPER_BEAM_SIZE,
     WHISPER_COMPUTE_TYPE,
     WHISPER_DEVICE,
+    WHISPER_INITIAL_PROMPT,
     WHISPER_LOCAL_MODEL,
     WHISPER_VAD_FILTER,
 )
@@ -28,7 +29,17 @@ _local_compute: str = ""
 _openai_stt_disabled = False
 
 # Skip segments Whisper thinks are non-speech (reduces garbage on noise)
-_NO_SPEECH_PROB_MAX = 0.55
+_NO_SPEECH_PROB_MAX = 0.45
+
+# Language hints improve recognition in voice chat
+_WHISPER_PROMPTS: dict[str, str] = {
+    "ru": "Голосовой чат Discord. Речь на русском языке.",
+    "en": "Discord voice chat. Speech in English.",
+    "uk": "Голосовий чат Discord. Мова українською.",
+    "de": "Discord-Sprachchat. Deutsch.",
+    "fr": "Chat vocal Discord. Français.",
+    "es": "Chat de voz de Discord. Español.",
+}
 
 _HAS_GOOGLE: bool | None = None
 _HAS_LOCAL: bool | None = None
@@ -270,14 +281,21 @@ def _local_transcribe(wav_path: Path, language: str | None) -> str:
     if not _probe_local():
         raise STTNotConfiguredError("pip install faster-whisper")
 
+    prompt = WHISPER_INITIAL_PROMPT or _WHISPER_PROMPTS.get(language or "", "")
+
     kwargs: dict = {
         "beam_size": WHISPER_BEAM_SIZE,
         "vad_filter": WHISPER_VAD_FILTER,
         "condition_on_previous_text": False,
         "temperature": 0.0,
+        "compression_ratio_threshold": 2.2,
+        "log_prob_threshold": -0.8,
+        "no_speech_threshold": 0.5,
     }
     if language:
         kwargs["language"] = language
+    if prompt:
+        kwargs["initial_prompt"] = prompt
 
     try:
         model = _get_local_model()

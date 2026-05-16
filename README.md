@@ -106,7 +106,7 @@ Copy `.env.example` to `.env`:
 | `LOG_MAX_BYTES` | No | Max log file size (bytes) |
 | `VOICE_WAKE_WORDS` | No | Comma-separated wake phrase(s) for `/listen` |
 | `VOICE_REPLY_TTS` | No | Speak AI replies in voice (`true`/`false`) |
-| `VOICE_REPLY_TEXT` | No | Post heard text + reply in chat (whisper-style) |
+| `VOICE_REPLY_TEXT` | No | Post heard text + reply in chat (`false` default; voice-only) |
 | `CHAT_WHISPER_DELETE_AFTER` | No | Auto-delete voice chat replies after N seconds (`90`) |
 | `CHAT_EPHEMERAL` | No | Slash replies only visible to you (`true`) |
 | `STT_ENGINE` | No | `local` (default), `google`, `openai`, `auto` |
@@ -182,7 +182,7 @@ Copy `.env.example` to `.env`:
 1. Join a voice channel.
 2. Run `/listen` in a text channel (same server).
 3. Wait for the bot to join, then speak when Discord shows your **green speaking indicator**.
-4. The bot transcribes speech → asks the LLM → posts a short **chat whisper** (auto-deletes) and optionally **speaks** the reply in voice.
+4. The bot transcribes speech → asks the LLM → **speaks** the reply in voice (no chat spam by default).
 
 Optional in `.env`:
 
@@ -202,8 +202,8 @@ The bot uses **local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 |-------|-------|------------------|---------------|
 | `tiny` | Fastest | Poor (hallucinations on silence) | ~1 GB |
 | `base` | Fast | OK | ~1 GB |
-| **`small`** | Medium | **Recommended** (default) | ~2 GB |
-| `medium` | Slow | Best local quality | ~5 GB |
+| `small` | Medium | Good balance | ~2 GB |
+| **`medium`** | Slower | **Clearest** (default, RTX GPU) | ~5 GB |
 
 In `.env`:
 

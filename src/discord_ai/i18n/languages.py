@@ -32,10 +32,13 @@ LANGUAGE_PRESETS: dict[str, LanguagePreset] = {
     "ru": LanguagePreset(
         code="ru",
         name="Русский",
-        prompt="Всегда отвечай на русском языке.",
-        edge_voice="ru-RU-SvetlanaNeural",
+        prompt="Всегда отвечай на русском языке. Говори коротко и ясно.",
+        edge_voice="ru-RU-DmitryNeural",
         gtts_lang="ru",
-        voices=("ru-RU-SvetlanaNeural", "ru-RU-DmitryNeural"),
+        voices=(
+            "ru-RU-DmitryNeural",
+            "ru-RU-SvetlanaNeural",
+        ),
     ),
     "uk": LanguagePreset(
         code="uk",

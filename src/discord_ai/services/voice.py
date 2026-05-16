@@ -12,6 +12,7 @@ from discord_ai.i18n.languages import resolve_language
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.settings import settings
 from discord_ai.services.voice_connect import connect_voice_channel
+from discord_ai.services.voice_playback import pcm_audio_source
 from discord_ai.services.voice_deps import check_voice_dependencies
 from discord_ai.tts.synthesizer import synthesize
 
@@ -109,7 +110,7 @@ async def play_tts_in_voice(
                 voice_client.stop_playing()
             else:
                 voice_client.stop()
-        source = discord.FFmpegPCMAudio(str(audio_file))
+        source = pcm_audio_source(str(audio_file))
         done = asyncio.Event()
 
         def after_play(err: Exception | None) -> None:
