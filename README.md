@@ -156,17 +156,25 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 
 Git is already initialized locally with an initial commit. To push to GitHub:
 
-1. Install [GitHub CLI](https://cli.github.com/) (or use `winget install GitHub.cli`)
-2. Log in:
+1. Install [GitHub CLI](https://cli.github.com/) (or `winget install GitHub.cli`)
+2. Log in (works even if `gh` is not on PATH yet):
 
    ```powershell
-   gh auth login
+   cd C:\Users\Gleb\discord-ai-bot
+   .\scripts\gh-login.ps1
    ```
+
+   Or use the full path after install:
+
+   ```powershell
+   & "C:\Program Files\GitHub CLI\gh.exe" auth login
+   ```
+
+   **If `gh` is not recognized:** close and reopen PowerShell, or use the scripts above.
 
 3. Create the remote repo and push:
 
    ```powershell
-   cd C:\Users\Gleb\discord-ai-bot
    .\scripts\publish-to-github.ps1
    ```
 
