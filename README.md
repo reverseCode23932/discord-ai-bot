@@ -1,13 +1,15 @@
 # Discord AI Bot
 
-A Discord bot with **AI chat** (OpenAI, **Ollama**, **Groq**, or custom), **per-user language** settings, voice listen (local Whisper STT), and TTS in voice channels.
+[![Release](https://img.shields.io/github/v/release/reverseCode23932/discord-ai-bot?label=release)](https://github.com/reverseCode23932/discord-ai-bot/releases)
+
+A Discord bot with **AI chat** (OpenAI, **Ollama**, **Groq**, or custom), **per-user language** settings, **voice listen** (Google + Whisper STT), and **Edge TTS** in voice channels.
 
 Uses an **official Discord bot token** from the [Developer Portal](https://discord.com/developers/applications) — not a personal account token.
 
 ## Features
 
 - Slash commands: `/ask`, `/say`, `/askvoice`, `/listen`, `/stoplisten`, `/language`, `/synthesizer`, `/voice`, `/settings`, `/reset`, `/leave`
-- **Voice listen**: join VC, hear your speech → Whisper STT → AI → optional TTS reply
+- **Voice listen** (`/listen`): speech → hybrid STT → Ollama/LLM → TTS in voice (no chat spam by default)
 - Prefix commands: `!ask`, `!lang`, `!reset`
 - Mention or prefix triggers in text channels
 - Per-user language (en, ru, uk, de, fr, es, pt, ja, zh, pl, tr)
@@ -375,6 +377,17 @@ If you use a venv in another folder (e.g. `Envs\dsbot`), activate it and reinsta
 
 - **Bug reports:** open an [Issue](https://github.com/reverseCode23932/discord-ai-bot/issues) with logs from `data/logs/bot.log` (remove your bot token first).
 - **Pull requests:** fork → branch → commit → PR. Keep changes focused; do not include `.env` or `data/`.
+
+## Releases
+
+See [Releases](https://github.com/reverseCode23932/discord-ai-bot/releases) on GitHub.  
+**Latest:** [v1.0.0](https://github.com/reverseCode23932/discord-ai-bot/releases/tag/v1.0.0) — first stable build.
+
+```powershell
+git clone https://github.com/reverseCode23932/discord-ai-bot.git
+cd discord-ai-bot
+git checkout v1.0.0
+```
 
 ## License
 
