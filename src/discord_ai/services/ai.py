@@ -1,19 +1,23 @@
-"""OpenAI chat completions."""
+"""Chat completions via OpenAI-compatible APIs (OpenAI, Ollama, Groq, custom)."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 
-from openai import OpenAI
+import httpx
+from openai import APIConnectionError, OpenAI, RateLimitError
 
 from discord_ai.config import (
     BASE_SYSTEM_PROMPT,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
+    LLM_PROVIDER,
     MAX_REPLY_CHARS,
-    OPENAI_API_KEY,
-    OPENAI_MODEL,
 )
 from discord_ai.i18n.languages import resolve_language
+from discord_ai.i18n.ui import ui_for_user
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.history import history
 from discord_ai.services.settings import settings
@@ -21,12 +25,72 @@ from discord_ai.services.settings import settings
 log = get_logger("ai")
 
 _client: OpenAI | None = None
+_model: str = LLM_MODEL
+_provider: str = LLM_PROVIDER
 
 
-def init_openai() -> None:
-    global _client
-    _client = OpenAI(api_key=OPENAI_API_KEY)
-    log.info("OpenAI client ready (model=%s)", OPENAI_MODEL)
+def _resolve_client_config() -> tuple[str, str, str]:
+    """Return (base_url, api_key, model)."""
+    provider = LLM_PROVIDER
+    model = LLM_MODEL
+
+    if provider == "openai":
+        return (
+            LLM_BASE_URL or "https://api.openai.com/v1",
+            LLM_API_KEY,
+            model,
+        )
+    if provider == "ollama":
+        return (
+            LLM_BASE_URL or "http://127.0.0.1:11434/v1",
+            LLM_API_KEY or "ollama",
+            model,
+        )
+    if provider == "groq":
+        return (
+            LLM_BASE_URL or "https://api.groq.com/openai/v1",
+            LLM_API_KEY,
+            model,
+        )
+    if provider == "custom":
+        if not LLM_BASE_URL:
+            raise RuntimeError("LLM_BASE_URL is required when LLM_PROVIDER=custom")
+        return (LLM_BASE_URL, LLM_API_KEY or "none", model)
+
+    raise RuntimeError(
+        f"Unknown LLM_PROVIDER={provider}. Use: openai, ollama, groq, custom"
+    )
+
+
+def _check_ollama_reachable(base_url: str) -> None:
+    root = base_url.removesuffix("/v1").rstrip("/")
+    try:
+        resp = httpx.get(f"{root}/api/tags", timeout=5.0)
+        resp.raise_for_status()
+    except Exception as exc:
+        log.warning(
+            "Ollama not reachable at %s — run: ollama serve && ollama pull %s (%s)",
+            root,
+            LLM_MODEL,
+            exc,
+        )
+
+
+def init_llm() -> None:
+    global _client, _model, _provider
+
+    base_url, api_key, model = _resolve_client_config()
+    _provider = LLM_PROVIDER
+    _model = model
+
+    if _provider == "ollama":
+        _check_ollama_reachable(base_url)
+
+    if _provider in ("openai", "groq", "custom") and not api_key:
+        raise RuntimeError(f"LLM_API_KEY required for provider={_provider}")
+
+    _client = OpenAI(api_key=api_key, base_url=base_url)
+    log.info("LLM ready (provider=%s, model=%s, base=%s)", _provider, _model, base_url)
 
 
 def system_prompt_for(user_id: int) -> str:
@@ -35,9 +99,23 @@ def system_prompt_for(user_id: int) -> str:
     return f"{BASE_SYSTEM_PROMPT}\n\n{lang.prompt}"
 
 
+def _friendly_error(user_id: int, exc: Exception) -> str:
+    lang = settings.get(user_id).language
+    if isinstance(exc, RateLimitError):
+        return ui_for_user(
+            lang,
+            "llm_quota",
+        )
+    if isinstance(exc, APIConnectionError):
+        if _provider == "ollama":
+            return ui_for_user(lang, "llm_ollama_down")
+        return ui_for_user(lang, "llm_connection", error=str(exc))
+    return ui_for_user(lang, "ai_error", error=str(exc))
+
+
 async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
     if _client is None:
-        raise RuntimeError("OpenAI client not initialized")
+        raise RuntimeError("LLM client not initialized")
 
     history.add(channel_id, "user", user_text)
     messages = [
@@ -46,7 +124,8 @@ async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
     ]
 
     log.info(
-        "OpenAI request (user=%s channel=%s lang=%s prompt_len=%d)",
+        "LLM request (provider=%s user=%s channel=%s lang=%s prompt_len=%d)",
+        _provider,
         user_id,
         channel_id,
         settings.get(user_id).language,
@@ -58,7 +137,7 @@ async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
 
     def _call() -> str:
         response = _client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=_model,
             messages=messages,
             temperature=0.7,
             max_tokens=800,
@@ -67,18 +146,19 @@ async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
 
     try:
         reply = await asyncio.to_thread(_call)
-    except Exception:
-        log.exception("OpenAI call failed (user=%s channel=%s)", user_id, channel_id)
-        raise
+    except Exception as exc:
+        log.exception("LLM call failed (provider=%s)", _provider)
+        raise RuntimeError(_friendly_error(user_id, exc)) from exc
 
     elapsed_ms = (time.perf_counter() - started) * 1000
     if not reply:
-        log.warning("Empty OpenAI reply (user=%s channel=%s)", user_id, channel_id)
-        reply = "I couldn't generate a reply. Try again."
+        log.warning("Empty LLM reply (user=%s channel=%s)", user_id, channel_id)
+        reply = ui_for_user(settings.get(user_id).language, "llm_empty")
 
     history.add(channel_id, "assistant", reply)
     log.info(
-        "OpenAI reply (user=%s channel=%s reply_len=%d elapsed_ms=%.0f)",
+        "LLM reply (provider=%s user=%s channel=%s reply_len=%d elapsed_ms=%.0f)",
+        _provider,
         user_id,
         channel_id,
         len(reply),
@@ -86,3 +166,7 @@ async def ask_ai(channel_id: int, user_id: int, user_text: str) -> str:
     )
     log.debug("Reply text: %s", reply[:500])
     return reply[:MAX_REPLY_CHARS]
+
+
+# Backwards compatibility
+init_openai = init_llm

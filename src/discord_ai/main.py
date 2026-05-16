@@ -12,10 +12,10 @@ if str(_SRC) not in sys.path:
 
 from discord_ai.bot.client import AIBot
 from discord_ai.commands import register_commands
-from discord_ai.config import DISCORD_TOKEN, OPENAI_MODEL, STT_ENGINE, require_env
+from discord_ai.config import DISCORD_TOKEN, LLM_MODEL, LLM_PROVIDER, STT_ENGINE, require_env
 from discord_ai.i18n.ui import BOT_UI_LANGUAGE
 from discord_ai.logging_setup import get_logger, setup_logging
-from discord_ai.services.ai import init_openai
+from discord_ai.services.ai import init_llm
 from discord_ai.services.stt import init_stt
 from discord_ai.services.voice_deps import log_voice_dependency_status
 
@@ -33,13 +33,14 @@ def main() -> None:
         )
 
     log.info(
-        "Starting bot (model=%s, ui_lang=%s, stt=%s)",
-        OPENAI_MODEL,
+        "Starting bot (llm=%s/%s, ui_lang=%s, stt=%s)",
+        LLM_PROVIDER,
+        LLM_MODEL,
         BOT_UI_LANGUAGE,
         STT_ENGINE,
     )
     log_voice_dependency_status()
-    init_openai()
+    init_llm()
     init_stt()
     bot = AIBot()
     register_commands(bot)

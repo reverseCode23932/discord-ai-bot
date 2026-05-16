@@ -1,6 +1,6 @@
 # Discord AI Bot
 
-A Discord bot that answers questions with **OpenAI**, supports **per-user language** settings, and can **speak in voice channels** using TTS (`edge-tts` or `gTTS`).
+A Discord bot with **AI chat** (OpenAI, **Ollama**, **Groq**, or custom), **per-user language** settings, voice listen (local Whisper STT), and TTS in voice channels.
 
 Uses an **official Discord bot token** from the [Developer Portal](https://discord.com/developers/applications) — not a personal account token.
 
@@ -20,7 +20,7 @@ Uses an **official Discord bot token** from the [Developer Portal](https://disco
 - **Python 3.10+**
 - **FFmpeg** (for voice playback) — [install guide](https://ffmpeg.org/download.html)
 - **Discord bot application** + token
-- **OpenAI API key**
+- **LLM backend**: [Ollama](https://ollama.com) (free/local), [Groq](https://groq.com) (free tier), or OpenAI
 
 ## Quick start
 
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 # Voice also needs FFmpeg on PATH and davey (included in requirements.txt)
 
 copy .env.example .env
-# Edit .env — add DISCORD_BOT_TOKEN and OPENAI_API_KEY
+# Edit .env — add DISCORD_BOT_TOKEN and LLM settings (see below)
 
 python run.py
 ```
@@ -94,8 +94,10 @@ Copy `.env.example` to `.env`:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DISCORD_BOT_TOKEN` | Yes | Bot token from Developer Portal |
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
-| `OPENAI_MODEL` | No | Default `gpt-4o-mini` |
+| `LLM_PROVIDER` | No | `ollama` (default), `groq`, `openai`, `custom` |
+| `LLM_MODEL` | No | e.g. `llama3.2`, `llama-3.1-8b-instant`, `gpt-4o-mini` |
+| `LLM_API_KEY` | If groq/openai | API key (Groq or OpenAI) |
+| `LLM_BASE_URL` | If custom/ollama | e.g. `http://127.0.0.1:11434/v1` |
 | `BOT_PREFIX` | No | Default `!` |
 | `DEFAULT_LANGUAGE` | No | Default `en` for new users |
 | `DEFAULT_SYNTHESIZER` | No | `edge` or `gtts` |
@@ -122,6 +124,49 @@ Copy `.env.example` to `.env`:
 | `/listen` | Join your VC and listen for spoken commands |
 | `/stoplisten` | Stop voice listening |
 | `/leave` | Disconnect from voice and stop listening |
+
+## LLM without OpenAI (quota / billing)
+
+### Option A — Ollama (local, free)
+
+1. Install [Ollama](https://ollama.com/download)
+2. In a terminal:
+
+   ```powershell
+   ollama serve
+   ollama pull llama3.2
+   ```
+
+3. In `.env`:
+
+   ```env
+   LLM_PROVIDER=ollama
+   LLM_MODEL=llama3.2
+   STT_ENGINE=local
+   ```
+
+### Option B — Groq (cloud, free tier)
+
+1. Get a key at https://console.groq.com  
+2. In `.env`:
+
+   ```env
+   LLM_PROVIDER=groq
+   LLM_API_KEY=gsk_your_key_here
+   LLM_MODEL=llama-3.1-8b-instant
+   ```
+
+### Option C — LM Studio (local GUI)
+
+1. Load a model in LM Studio → start server  
+2. In `.env`:
+
+   ```env
+   LLM_PROVIDER=custom
+   LLM_BASE_URL=http://127.0.0.1:1234/v1
+   LLM_API_KEY=lm-studio
+   LLM_MODEL=name-shown-in-lm-studio
+   ```
 
 ## Voice commands (`/listen`)
 
@@ -176,7 +221,8 @@ Set `LOG_LEVEL=DEBUG` to log full prompts and replies.
 | `OpusError: corrupted stream` | Reinstall deps from `requirements.txt` (DAVE-patched voice-recv fork) |
 | Voice silent / no audio | Install FFmpeg and ensure it is on `PATH` |
 | `Missing env vars` | Create `.env` from `.env.example` |
-| OpenAI errors | Check API key and billing on OpenAI dashboard |
+| OpenAI 429 / quota | Switch to `LLM_PROVIDER=ollama` or `groq` |
+| Ollama connection | Run `ollama serve` and `ollama pull <model>` |
 
 ## Publish to GitHub
 

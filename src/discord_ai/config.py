@@ -26,8 +26,30 @@ def _int_env(name: str, default: int) -> int:
 LOG_MAX_BYTES = _int_env("LOG_MAX_BYTES", 5 * 1024 * 1024)
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+
+# LLM — openai | ollama (local) | groq (free tier) | custom
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+if LLM_PROVIDER not in ("openai", "ollama", "groq", "custom"):
+    LLM_PROVIDER = "ollama"
+
+LLM_MODEL = os.getenv("LLM_MODEL", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+
+if not LLM_MODEL:
+    if LLM_PROVIDER == "ollama":
+        LLM_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+    elif LLM_PROVIDER == "groq":
+        LLM_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    else:
+        LLM_MODEL = OPENAI_MODEL
+
+LLM_API_KEY = os.getenv("LLM_API_KEY", OPENAI_API_KEY).strip()
+LLM_BASE_URL = os.getenv(
+    "LLM_BASE_URL",
+    os.getenv("OLLAMA_BASE_URL", ""),
+).strip()
+
 BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 
 BASE_SYSTEM_PROMPT = (
@@ -73,6 +95,8 @@ def require_env() -> list[str]:
     missing = []
     if not DISCORD_TOKEN:
         missing.append("DISCORD_BOT_TOKEN")
-    if not OPENAI_API_KEY:
-        missing.append("OPENAI_API_KEY")
+    if LLM_PROVIDER in ("openai", "groq", "custom") and not LLM_API_KEY:
+        missing.append("LLM_API_KEY (or OPENAI_API_KEY)")
+    if LLM_PROVIDER == "custom" and not LLM_BASE_URL:
+        missing.append("LLM_BASE_URL")
     return missing

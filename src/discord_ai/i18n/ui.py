@@ -31,6 +31,15 @@ UI: dict[str, dict[str, str]] = {
         ),
         "heard_reply": "**Heard:** {heard}\n**Reply:** {reply}",
         "ai_error": "AI error: {error}",
+        "llm_quota": (
+            "OpenAI quota exhausted. Use **Ollama** (free/local) or **Groq** (free tier).\n"
+            "See README — set `LLM_PROVIDER=ollama` in `.env`."
+        ),
+        "llm_ollama_down": (
+            "Ollama is not running. Start it: `ollama serve` then `ollama pull llama3.2`"
+        ),
+        "llm_connection": "Cannot reach LLM server: {error}",
+        "llm_empty": "I couldn't generate a reply. Try again.",
         "history_cleared": "History cleared.",
         "use_in_server": "Use this in a server.",
         "voice_deps": "Voice listen needs:\n{items}",
@@ -56,6 +65,15 @@ UI: dict[str, dict[str, str]] = {
         ),
         "heard_reply": "**Услышал:** {heard}\n**Ответ:** {reply}",
         "ai_error": "Ошибка AI: {error}",
+        "llm_quota": (
+            "Квота OpenAI исчерпана. Используйте **Ollama** (бесплатно, локально) или **Groq**.\n"
+            "В `.env`: `LLM_PROVIDER=ollama` — см. README."
+        ),
+        "llm_ollama_down": (
+            "Ollama не запущена. Выполните: `ollama serve` и `ollama pull llama3.2`"
+        ),
+        "llm_connection": "Нет связи с LLM-сервером: {error}",
+        "llm_empty": "Не удалось сгенерировать ответ. Попробуйте ещё раз.",
         "history_cleared": "История очищена.",
         "use_in_server": "Используйте на сервере.",
         "voice_deps": "Для голоса нужно:\n{items}",
@@ -81,6 +99,15 @@ UI: dict[str, dict[str, str]] = {
         ),
         "heard_reply": "**Почув:** {heard}\n**Відповідь:** {reply}",
         "ai_error": "Помилка AI: {error}",
+        "llm_quota": (
+            "Квоту OpenAI вичерпано. Використайте **Ollama** або **Groq**.\n"
+            "У `.env`: `LLM_PROVIDER=ollama`."
+        ),
+        "llm_ollama_down": (
+            "Ollama не запущена. Запустіть: `ollama serve` та `ollama pull llama3.2`"
+        ),
+        "llm_connection": "Немає з'єднання з LLM: {error}",
+        "llm_empty": "Не вдалося згенерувати відповідь.",
         "history_cleared": "Історію очищено.",
         "use_in_server": "Використовуйте на сервері.",
         "voice_deps": "Для голосу потрібно:\n{items}",
