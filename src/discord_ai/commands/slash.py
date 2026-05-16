@@ -9,6 +9,7 @@ from discord_ai.bot.client import AIBot
 from discord_ai.i18n.languages import language_list_text, resolve_language
 from discord_ai.services.ai import ask_ai
 from discord_ai.services.history import history
+from discord_ai.i18n.ui import ui_for_user
 from discord_ai.services.settings import format_prefs, settings
 from discord_ai.services.voice import play_tts_in_voice
 from discord_ai.services.voice_deps import check_voice_dependencies
@@ -168,10 +169,15 @@ def register_slash(bot: AIBot) -> None:
         reply_in_voice: bool = True,
     ) -> None:
         _log_invocation(interaction, "listen")
+        lang = settings.get(interaction.user.id).language
         missing = check_voice_dependencies()
         if missing:
             await interaction.response.send_message(
-                "Voice listen needs:\n" + "\n".join(f"- {m}" for m in missing),
+                ui_for_user(
+                    lang,
+                    "voice_deps",
+                    items="\n".join(f"- {m}" for m in missing),
+                ),
                 ephemeral=True,
             )
             return
@@ -182,32 +188,43 @@ def register_slash(bot: AIBot) -> None:
             )
         except Exception as exc:
             log.exception("Failed to start listening")
-            await interaction.followup.send(f"Could not start listening: {exc}")
+            await interaction.followup.send(
+                ui_for_user(lang, "listen_failed", error=str(exc)),
+                ephemeral=True,
+            )
             return
-        await interaction.followup.send(msg)
+        await interaction.followup.send(msg, ephemeral=True)
 
     @bot.tree.command(name="stoplisten", description="Stop listening for voice commands")
     async def slash_stoplisten(interaction: discord.Interaction) -> None:
         _log_invocation(interaction, "stoplisten")
+        lang = settings.get(interaction.user.id).language
         if not interaction.guild:
-            await interaction.response.send_message("Use this in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                ui_for_user(lang, "use_in_server"), ephemeral=True
+            )
             return
         stopped = await bot.listen_manager.stop(interaction.guild.id)
         if stopped:
-            await interaction.response.send_message("Stopped listening for voice commands.")
+            await interaction.response.send_message(
+                ui_for_user(lang, "listen_stopped"), ephemeral=True
+            )
         else:
             await interaction.response.send_message(
-                "Not listening in this server.", ephemeral=True
+                ui_for_user(lang, "not_listening"), ephemeral=True
             )
 
     @bot.tree.command(name="leave", description="Leave voice and stop listening")
     async def slash_leave(interaction: discord.Interaction) -> None:
+        lang = settings.get(interaction.user.id).language
         if interaction.guild:
             await bot.listen_manager.stop(interaction.guild.id)
         if interaction.guild and interaction.guild.voice_client:
             await interaction.guild.voice_client.disconnect()
-            await interaction.response.send_message("Left voice channel.")
+            await interaction.response.send_message(
+                ui_for_user(lang, "left_vc"), ephemeral=True
+            )
         else:
             await interaction.response.send_message(
-                "Not in a voice channel.", ephemeral=True
+                ui_for_user(lang, "not_in_vc"), ephemeral=True
             )

@@ -44,10 +44,27 @@ _wake = os.getenv("VOICE_WAKE_WORDS", "").strip()
 VOICE_WAKE_WORDS: tuple[str, ...] = tuple(w.strip() for w in _wake.split(",") if w.strip())
 
 VOICE_REPLY_TTS = os.getenv("VOICE_REPLY_TTS", "true").strip().lower() in ("1", "true", "yes")
-VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "true").strip().lower() in ("1", "true", "yes")
 
 # ~0.4s of stereo 48kHz 16-bit PCM minimum before sending to Whisper
 MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 76_800)
+
+# openai | google | auto (OpenAI, fallback to Google on quota)
+STT_ENGINE = os.getenv("STT_ENGINE", "auto").strip().lower()
+if STT_ENGINE not in ("openai", "google", "auto"):
+    STT_ENGINE = "auto"
+
+# Min seconds between processing voice utterances (anti-spam)
+VOICE_UTTERANCE_COOLDOWN = _int_env("VOICE_UTTERANCE_COOLDOWN", 3)
+
+# Post heard+reply in text during /listen (default off — less chat spam)
+VOICE_REPLY_TEXT = os.getenv("VOICE_REPLY_TEXT", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Error notice cooldown in text channel during listen
+VOICE_ERROR_COOLDOWN = _int_env("VOICE_ERROR_COOLDOWN", 60)
 
 
 def require_env() -> list[str]:

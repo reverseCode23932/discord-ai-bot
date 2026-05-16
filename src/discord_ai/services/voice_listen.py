@@ -14,15 +14,18 @@ import discord
 
 from discord_ai.config import (
     MIN_SPEECH_BYTES,
+    VOICE_ERROR_COOLDOWN,
     VOICE_REPLY_TEXT,
     VOICE_REPLY_TTS,
+    VOICE_UTTERANCE_COOLDOWN,
     VOICE_WAKE_WORDS,
 )
 from discord_ai.i18n.languages import resolve_language
+from discord_ai.i18n.ui import ui_default, ui_for_user
 from discord_ai.logging_setup import get_logger
 from discord_ai.services.ai import ask_ai
 from discord_ai.services.settings import settings
-from discord_ai.services.stt import transcribe_wav
+from discord_ai.services.stt import STTQuotaError, transcribe_wav
 from discord_ai.services.voice_connect import HAS_VOICE_RECV, connect_voice_channel
 from discord_ai.tts.synthesizer import synthesize
 
@@ -140,8 +143,12 @@ class ListenSession:
     guild_id: int
     user_id: int
     text_channel_id: int
+    user_lang: str
     reply_in_voice: bool | None
     sink: object = field(default=None)
+    last_utterance_at: float = 0.0
+    last_error_at: float = 0.0
+    last_error_key: str = ""
 
 
 class VoiceListenManager:
@@ -151,6 +158,22 @@ class VoiceListenManager:
 
     def is_listening(self, guild_id: int) -> bool:
         return guild_id in self.sessions
+
+    async def _notify_channel(
+        self,
+        session: ListenSession,
+        channel: discord.TextChannel,
+        key: str,
+        *,
+        cooldown: int = VOICE_ERROR_COOLDOWN,
+        **fmt: str,
+    ) -> None:
+        now = time.monotonic()
+        if session.last_error_key == key and now - session.last_error_at < cooldown:
+            return
+        session.last_error_at = now
+        session.last_error_key = key
+        await channel.send(ui_for_user(session.user_lang, key, **fmt))
 
     def _make_on_utterance(self, session: ListenSession) -> Callable[[bytes], None]:
         def on_utterance(pcm: bytes) -> None:
@@ -212,7 +235,12 @@ class VoiceListenManager:
             log.info("Voice listen restarted (guild=%s)", guild_id)
             channel = self.bot.get_channel(session.text_channel_id)
             if isinstance(channel, discord.TextChannel):
-                await channel.send("Voice listen recovered after an audio glitch.")
+                await self._notify_channel(
+                    session,
+                    channel,
+                    "listen_recovered",
+                    cooldown=120,
+                )
         except Exception:
             log.exception("Could not restart voice listen (guild=%s)", guild_id)
 
@@ -227,12 +255,18 @@ class VoiceListenManager:
                 "Install voice receive from the DAVE-compatible fork:\n"
                 "pip install git+https://github.com/rdphillips7/discord-ext-voice-recv.git@main"
             )
-        if not interaction.guild or not interaction.user.voice:
-            raise RuntimeError("Join a voice channel first.")
+        if not interaction.guild:
+            raise RuntimeError(ui_default("use_in_server"))
 
-        channel = interaction.user.voice.channel
+        user_lang = settings.get(interaction.user.id).language
+        member = interaction.guild.get_member(interaction.user.id)
+        voice_state = (member.voice if member else None) or interaction.user.voice
+        if not voice_state or not voice_state.channel:
+            raise RuntimeError(ui_for_user(user_lang, "join_vc"))
+
+        channel = voice_state.channel
         if not isinstance(channel, discord.VoiceChannel):
-            raise RuntimeError("Invalid voice channel.")
+            raise RuntimeError(ui_for_user(user_lang, "join_vc"))
 
         guild_id = interaction.guild.id
         await self.stop(guild_id)
@@ -246,6 +280,7 @@ class VoiceListenManager:
             guild_id=guild_id,
             user_id=interaction.user.id,
             text_channel_id=interaction.channel_id,  # type: ignore[assignment]
+            user_lang=user_lang,
             reply_in_voice=reply_in_voice,
         )
         self.sessions[guild_id] = session
@@ -258,14 +293,17 @@ class VoiceListenManager:
             channel.id,
         )
 
-        wake = (
-            f" Say **{VOICE_WAKE_WORDS[0]}** first, then your command."
-            if VOICE_WAKE_WORDS
-            else " Speak your question when the green circle appears."
-        )
-        return (
-            f"Listening in **{channel.name}** for <@{session.user_id}>.{wake}\n"
-            "Use `/stoplisten` or `/leave` to stop."
+        if VOICE_WAKE_WORDS:
+            wake = ui_for_user(user_lang, "wake_word_hint", word=VOICE_WAKE_WORDS[0])
+        else:
+            wake = ui_for_user(user_lang, "wake_hint")
+
+        return ui_for_user(
+            user_lang,
+            "listen_started",
+            channel=channel.name,
+            mention=f"<@{session.user_id}>",
+            wake=wake,
         )
 
     async def stop(self, guild_id: int) -> bool:
@@ -295,6 +333,12 @@ class VoiceListenManager:
         if not session or session.user_id != user_id:
             return
 
+        now = time.monotonic()
+        if now - session.last_utterance_at < VOICE_UTTERANCE_COOLDOWN:
+            log.debug("Utterance ignored (cooldown)")
+            return
+        session.last_utterance_at = now
+
         text_channel = self.bot.get_channel(text_channel_id)
         if not isinstance(text_channel, discord.TextChannel):
             return
@@ -302,11 +346,16 @@ class VoiceListenManager:
         wav_path = self.bot.temp_dir / f"stt_{guild_id}_{user_id}.wav"
         try:
             wav_path.write_bytes(pcm_to_wav(pcm))
-            lang = settings.get(user_id).language
-            raw = await transcribe_wav(wav_path, language=lang)
+            raw = await transcribe_wav(wav_path, language=session.user_lang)
+        except STTQuotaError:
+            log.error("STT quota exhausted (guild=%s)", guild_id)
+            await self._notify_channel(
+                session, text_channel, "quota_exhausted", cooldown=300
+            )
+            return
         except Exception:
             log.exception("STT failed (guild=%s user=%s)", guild_id, user_id)
-            await text_channel.send("I couldn't understand that — try again.")
+            await self._notify_channel(session, text_channel, "stt_failed")
             return
         finally:
             wav_path.unlink(missing_ok=True)
@@ -319,10 +368,19 @@ class VoiceListenManager:
             log.debug("Ignored (no wake word): %s", raw[:80])
             return
 
-        stop_phrases = {"stop listening", "stop listen", "stop", "quiet", "shut up"}
+        stop_phrases = {
+            "stop listening",
+            "stop listen",
+            "stop",
+            "quiet",
+            "shut up",
+            "стоп",
+            "остановись",
+            "зупини",
+        }
         if command.lower() in stop_phrases:
             await self.stop(guild_id)
-            await text_channel.send("Stopped listening.")
+            await text_channel.send(ui_for_user(session.user_lang, "listen_stopped"))
             return
 
         log.info("Voice command (user=%s): %s", user_id, command[:120])
@@ -331,12 +389,21 @@ class VoiceListenManager:
             reply = await ask_ai(text_channel_id, user_id, command)
         except Exception as exc:
             log.exception("AI failed for voice command")
-            await text_channel.send(f"AI error: {exc}")
+            await self._notify_channel(
+                session, text_channel, "ai_error", error=str(exc)
+            )
             return
 
         use_tts = VOICE_REPLY_TTS if reply_in_voice is None else reply_in_voice
         if VOICE_REPLY_TEXT:
-            await text_channel.send(f"**Heard:** {command}\n**Reply:** {reply}")
+            await text_channel.send(
+                ui_for_user(
+                    session.user_lang,
+                    "heard_reply",
+                    heard=command,
+                    reply=reply,
+                )
+            )
 
         if use_tts:
             guild = self.bot.get_guild(guild_id)
