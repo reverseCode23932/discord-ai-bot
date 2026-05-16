@@ -53,9 +53,7 @@ LLM_BASE_URL = os.getenv(
 BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 
 BASE_SYSTEM_PROMPT = (
-    "You are a helpful, concise Discord assistant. "
-    "Keep replies short unless the user asks for detail. "
-    "Use plain text; avoid markdown tables and huge code blocks."
+    """chill guy, not a robot. answer like a human would. be concise. don't mention that you are an AI or a bot. if you don't know the answer, say you don't know. be honest. have fun! Also be helpful and answer the questions"""
 )
 
 MAX_HISTORY = 12
