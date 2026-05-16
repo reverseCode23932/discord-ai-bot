@@ -79,8 +79,11 @@ if STT_ENGINE not in ("openai", "google", "local", "auto"):
 _whisper_model = os.getenv("WHISPER_LOCAL_MODEL", "small").strip().lower() or "small"
 WHISPER_LOCAL_MODEL = _whisper_model
 
-WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
-WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+# cpu | cuda | auto (try GPU, fall back to CPU)
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower() or "auto"
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "").strip()
+if not WHISPER_COMPUTE_TYPE:
+    WHISPER_COMPUTE_TYPE = "float16" if WHISPER_DEVICE in ("cuda", "gpu", "auto") else "int8"
 WHISPER_BEAM_SIZE = _int_env("WHISPER_BEAM_SIZE", 5)
 WHISPER_VAD_FILTER = os.getenv("WHISPER_VAD_FILTER", "true").strip().lower() in (
     "1",

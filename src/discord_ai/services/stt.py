@@ -17,6 +17,7 @@ from discord_ai.config import (
     WHISPER_VAD_FILTER,
 )
 from discord_ai.logging_setup import get_logger
+from discord_ai.services.cuda_paths import ensure_nvidia_dll_paths
 
 log = get_logger("stt")
 
@@ -159,7 +160,22 @@ def _is_cuda_runtime_error(exc: BaseException) -> bool:
     )
 
 
+def _prepare_cuda() -> list[str]:
+    paths = ensure_nvidia_dll_paths()
+    if paths:
+        log.info("NVIDIA CUDA DLL paths added (%d dirs)", len(paths))
+    else:
+        log.warning(
+            "CUDA requested but no nvidia/*/bin in site-packages. "
+            "Run: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12"
+        )
+    return paths
+
+
 def _load_whisper_model(device: str, compute_type: str):
+    if device in ("cuda", "gpu"):
+        _prepare_cuda()
+
     from faster_whisper import WhisperModel
 
     log.info(
@@ -189,6 +205,19 @@ def _get_local_model():
 
     device = WHISPER_DEVICE
     compute = WHISPER_COMPUTE_TYPE
+
+    if device == "auto":
+        try:
+            import ctranslate2
+
+            if ctranslate2.get_cuda_device_count() > 0:
+                device = "cuda"
+            else:
+                device = "cpu"
+                compute = "int8"
+        except Exception:
+            device = "cpu"
+            compute = "int8"
 
     if device in ("cuda", "gpu"):
         try:
