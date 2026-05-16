@@ -79,13 +79,24 @@ def available_stt_backends() -> list[str]:
 
 def init_stt() -> None:
     global _client
-    _client = OpenAI(api_key=OPENAI_API_KEY)
+    _client = None
+
+    # Only connect to OpenAI when Whisper API may be used (not needed for local-only STT)
+    if STT_ENGINE == "openai":
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY required when STT_ENGINE=openai")
+        _client = OpenAI(api_key=OPENAI_API_KEY)
+    elif STT_ENGINE == "auto" and OPENAI_API_KEY:
+        _client = OpenAI(api_key=OPENAI_API_KEY)
+
     backends = available_stt_backends()
     log.info("STT engine=%s, available backends: %s", STT_ENGINE, ", ".join(backends) or "none")
     if STT_ENGINE in ("google", "auto") and not _probe_google():
         log.warning("Google STT unavailable — pip install SpeechRecognition")
     if STT_ENGINE in ("local", "auto") and not _probe_local():
         log.warning("Local STT unavailable — pip install faster-whisper")
+    if STT_ENGINE == "local":
+        log.info("STT uses local Whisper only — no OpenAI key required")
 
 
 def _openai_transcribe(wav_path: Path, language: str | None) -> str:
@@ -94,7 +105,9 @@ def _openai_transcribe(wav_path: Path, language: str | None) -> str:
         raise STTQuotaError("OpenAI STT skipped (quota previously exhausted)")
 
     if _client is None:
-        raise RuntimeError("STT client not initialized")
+        raise STTNotConfiguredError(
+            "OpenAI Whisper not configured. Set STT_ENGINE=local or add OPENAI_API_KEY"
+        )
 
     with wav_path.open("rb") as audio_file:
         kwargs: dict = {"model": "whisper-1", "file": audio_file}
