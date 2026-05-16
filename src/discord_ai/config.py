@@ -48,10 +48,12 @@ VOICE_REPLY_TTS = os.getenv("VOICE_REPLY_TTS", "true").strip().lower() in ("1", 
 # ~0.4s of stereo 48kHz 16-bit PCM minimum before sending to Whisper
 MIN_SPEECH_BYTES = _int_env("MIN_SPEECH_BYTES", 76_800)
 
-# openai | google | auto (OpenAI, fallback to Google on quota)
-STT_ENGINE = os.getenv("STT_ENGINE", "auto").strip().lower()
-if STT_ENGINE not in ("openai", "google", "auto"):
-    STT_ENGINE = "auto"
+# openai | google | local | auto (openai -> google -> local)
+STT_ENGINE = os.getenv("STT_ENGINE", "local").strip().lower()
+if STT_ENGINE not in ("openai", "google", "local", "auto"):
+    STT_ENGINE = "local"
+
+WHISPER_LOCAL_MODEL = os.getenv("WHISPER_LOCAL_MODEL", "tiny").strip() or "tiny"
 
 # Min seconds between processing voice utterances (anti-spam)
 VOICE_UTTERANCE_COOLDOWN = _int_env("VOICE_UTTERANCE_COOLDOWN", 3)

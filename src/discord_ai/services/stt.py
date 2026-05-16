@@ -1,4 +1,4 @@
-"""Speech-to-text: OpenAI Whisper with optional Google fallback."""
+"""Speech-to-text: OpenAI, Google, or local faster-whisper (no API key)."""
 
 from __future__ import annotations
 
@@ -7,14 +7,18 @@ from pathlib import Path
 
 from openai import OpenAI, RateLimitError
 
-from discord_ai.config import OPENAI_API_KEY, STT_ENGINE
+from discord_ai.config import OPENAI_API_KEY, STT_ENGINE, WHISPER_LOCAL_MODEL
 from discord_ai.logging_setup import get_logger
 
 log = get_logger("stt")
 
 _client: OpenAI | None = None
+_local_model: object | None = None
+_openai_stt_disabled = False
 
-# Maps our language codes to SpeechRecognition / Google locale hints
+_HAS_GOOGLE: bool | None = None
+_HAS_LOCAL: bool | None = None
+
 _GOOGLE_LANG: dict[str, str] = {
     "en": "en-US",
     "ru": "ru-RU",
@@ -31,17 +35,67 @@ _GOOGLE_LANG: dict[str, str] = {
 
 
 class STTQuotaError(Exception):
-    """OpenAI billing/quota blocks Whisper."""
+    """No working STT backend available."""
+
+
+class STTNotConfiguredError(Exception):
+    """Requested STT engine is not installed."""
+
+
+def _probe_google() -> bool:
+    global _HAS_GOOGLE
+    if _HAS_GOOGLE is None:
+        try:
+            import speech_recognition  # noqa: F401
+
+            _HAS_GOOGLE = True
+        except ImportError:
+            _HAS_GOOGLE = False
+    return _HAS_GOOGLE
+
+
+def _probe_local() -> bool:
+    global _HAS_LOCAL
+    if _HAS_LOCAL is None:
+        try:
+            import faster_whisper  # noqa: F401
+
+            _HAS_LOCAL = True
+        except ImportError:
+            _HAS_LOCAL = False
+    return _HAS_LOCAL
+
+
+def available_stt_backends() -> list[str]:
+    backends: list[str] = []
+    if OPENAI_API_KEY:
+        backends.append("openai")
+    if _probe_google():
+        backends.append("google")
+    if _probe_local():
+        backends.append(f"local({WHISPER_LOCAL_MODEL})")
+    return backends
 
 
 def init_stt() -> None:
     global _client
     _client = OpenAI(api_key=OPENAI_API_KEY)
+    backends = available_stt_backends()
+    log.info("STT engine=%s, available backends: %s", STT_ENGINE, ", ".join(backends) or "none")
+    if STT_ENGINE in ("google", "auto") and not _probe_google():
+        log.warning("Google STT unavailable — pip install SpeechRecognition")
+    if STT_ENGINE in ("local", "auto") and not _probe_local():
+        log.warning("Local STT unavailable — pip install faster-whisper")
 
 
 def _openai_transcribe(wav_path: Path, language: str | None) -> str:
+    global _openai_stt_disabled
+    if _openai_stt_disabled:
+        raise STTQuotaError("OpenAI STT skipped (quota previously exhausted)")
+
     if _client is None:
         raise RuntimeError("STT client not initialized")
+
     with wav_path.open("rb") as audio_file:
         kwargs: dict = {"model": "whisper-1", "file": audio_file}
         if language:
@@ -51,6 +105,9 @@ def _openai_transcribe(wav_path: Path, language: str | None) -> str:
 
 
 def _google_transcribe(wav_path: Path, language: str | None) -> str:
+    if not _probe_google():
+        raise STTNotConfiguredError("pip install SpeechRecognition")
+
     import speech_recognition as sr
 
     recognizer = sr.Recognizer()
@@ -59,6 +116,28 @@ def _google_transcribe(wav_path: Path, language: str | None) -> str:
         audio = recognizer.record(source)
     text = recognizer.recognize_google(audio, language=google_lang)
     return (text or "").strip()
+
+
+def _get_local_model():
+    global _local_model
+    if _local_model is None:
+        from faster_whisper import WhisperModel
+
+        log.info("Loading local Whisper model '%s' (first run may download files)...", WHISPER_LOCAL_MODEL)
+        _local_model = WhisperModel(WHISPER_LOCAL_MODEL, device="cpu", compute_type="int8")
+    return _local_model
+
+
+def _local_transcribe(wav_path: Path, language: str | None) -> str:
+    if not _probe_local():
+        raise STTNotConfiguredError("pip install faster-whisper")
+
+    model = _get_local_model()
+    kwargs: dict = {}
+    if language:
+        kwargs["language"] = language
+    segments, _ = model.transcribe(str(wav_path), **kwargs)
+    return " ".join(segment.text.strip() for segment in segments).strip()
 
 
 def _is_quota_error(exc: RateLimitError) -> bool:
@@ -72,32 +151,63 @@ def _is_quota_error(exc: RateLimitError) -> bool:
     return "insufficient_quota" in str(exc).lower() or "quota" in str(exc).lower()
 
 
-async def transcribe_wav(wav_path: Path, *, language: str | None = None) -> str:
-    engine = STT_ENGINE
-
-    if engine == "google":
-        text = await asyncio.to_thread(_google_transcribe, wav_path, language)
-        log.info("Google STT (%d chars): %s", len(text), text[:120])
-        return text
-
+async def _run(engine: str, wav_path: Path, language: str | None) -> str:
     if engine == "openai":
-        text = await asyncio.to_thread(_openai_transcribe, wav_path, language)
-        log.info("Whisper STT (%d chars): %s", len(text), text[:120])
+        return await asyncio.to_thread(_openai_transcribe, wav_path, language)
+    if engine == "google":
+        return await asyncio.to_thread(_google_transcribe, wav_path, language)
+    if engine == "local":
+        return await asyncio.to_thread(_local_transcribe, wav_path, language)
+    raise ValueError(f"Unknown STT engine: {engine}")
+
+
+async def transcribe_wav(wav_path: Path, *, language: str | None = None) -> str:
+    global _openai_stt_disabled
+
+    if STT_ENGINE in ("openai", "google", "local"):
+        text = await _run(STT_ENGINE, wav_path, language)
+        log.info("%s STT (%d chars): %s", STT_ENGINE, len(text), text[:120])
         return text
 
-    # auto: OpenAI first, then Google on quota errors
-    try:
-        text = await asyncio.to_thread(_openai_transcribe, wav_path, language)
-        log.info("Whisper STT (%d chars): %s", len(text), text[:120])
-        return text
-    except RateLimitError as exc:
-        if not _is_quota_error(exc):
-            raise
-        log.warning("OpenAI STT quota hit — falling back to Google STT")
+    # auto: openai -> google -> local
+    errors: list[str] = []
+
+    if not _openai_stt_disabled and OPENAI_API_KEY:
         try:
-            text = await asyncio.to_thread(_google_transcribe, wav_path, language)
-            log.info("Google STT fallback (%d chars): %s", len(text), text[:120])
+            text = await _run("openai", wav_path, language)
+            log.info("Whisper API STT (%d chars): %s", len(text), text[:120])
             return text
-        except Exception as fallback_exc:
-            log.exception("Google STT fallback failed")
-            raise STTQuotaError("OpenAI quota exhausted and Google STT failed") from fallback_exc
+        except RateLimitError as exc:
+            if _is_quota_error(exc):
+                _openai_stt_disabled = True
+                log.warning("OpenAI STT quota exhausted — using fallbacks only")
+                errors.append("openai: quota")
+            else:
+                raise
+        except Exception as exc:
+            log.warning("OpenAI STT failed: %s", exc)
+            errors.append(f"openai: {exc}")
+
+    if _probe_google():
+        try:
+            text = await _run("google", wav_path, language)
+            log.info("Google STT (%d chars): %s", len(text), text[:120])
+            return text
+        except Exception as exc:
+            log.warning("Google STT failed: %s", exc)
+            errors.append(f"google: {exc}")
+
+    if _probe_local():
+        try:
+            text = await _run("local", wav_path, language)
+            log.info("Local Whisper STT (%d chars): %s", len(text), text[:120])
+            return text
+        except Exception as exc:
+            log.exception("Local STT failed")
+            errors.append(f"local: {exc}")
+
+    hint = (
+        "Install STT: pip install faster-whisper SpeechRecognition\n"
+        "Or set STT_ENGINE=local in .env (works without OpenAI quota)"
+    )
+    raise STTQuotaError(f"No STT backend worked ({'; '.join(errors)}). {hint}")

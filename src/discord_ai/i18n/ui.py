@@ -26,8 +26,8 @@ UI: dict[str, dict[str, str]] = {
         "listen_recovered": "Voice listen recovered after an audio glitch.",
         "stt_failed": "Could not understand that — try again.",
         "quota_exhausted": (
-            "OpenAI quota is exhausted (Whisper/STT). "
-            "Add billing at https://platform.openai.com or set `STT_ENGINE=google` in `.env`."
+            "Speech recognition failed. Install: `pip install faster-whisper` "
+            "and set `STT_ENGINE=local` in `.env` (works without OpenAI)."
         ),
         "heard_reply": "**Heard:** {heard}\n**Reply:** {reply}",
         "ai_error": "AI error: {error}",
@@ -51,8 +51,8 @@ UI: dict[str, dict[str, str]] = {
         "listen_recovered": "Голосовое прослушивание восстановлено.",
         "stt_failed": "Не разобрал речь — попробуйте ещё раз.",
         "quota_exhausted": (
-            "Квота OpenAI исчерпана (Whisper). "
-            "Пополните баланс на platform.openai.com или укажите `STT_ENGINE=google` в `.env`."
+            "Распознавание речи не работает. Установите: `pip install faster-whisper` "
+            "и укажите `STT_ENGINE=local` в `.env` (без OpenAI)."
         ),
         "heard_reply": "**Услышал:** {heard}\n**Ответ:** {reply}",
         "ai_error": "Ошибка AI: {error}",
@@ -76,8 +76,8 @@ UI: dict[str, dict[str, str]] = {
         "listen_recovered": "Голосове прослуховування відновлено.",
         "stt_failed": "Не розібрав мову — спробуйте ще.",
         "quota_exhausted": (
-            "Квоту OpenAI вичерпано (Whisper). "
-            "Додайте баланс або вкажіть `STT_ENGINE=google` у `.env`."
+            "Розпізнавання мови не працює. Встановіть: `pip install faster-whisper` "
+            "і вкажіть `STT_ENGINE=local` у `.env` (без OpenAI)."
         ),
         "heard_reply": "**Почув:** {heard}\n**Відповідь:** {reply}",
         "ai_error": "Помилка AI: {error}",

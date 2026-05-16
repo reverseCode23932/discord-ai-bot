@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from discord_ai.config import STT_ENGINE
 from discord_ai.logging_setup import get_logger
+from discord_ai.services.stt import _probe_google, _probe_local
 
 log = get_logger("voice")
 
@@ -40,6 +42,12 @@ def check_voice_dependencies() -> list[str]:
                 )
         except Exception:
             pass
+
+    if STT_ENGINE in ("google", "auto") and not _probe_google():
+        missing.append("SpeechRecognition — pip install SpeechRecognition  (Google STT)")
+
+    if STT_ENGINE in ("local", "auto") and not _probe_local():
+        missing.append("faster-whisper — pip install faster-whisper  (local STT, no API)")
 
     return missing
 
